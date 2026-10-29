@@ -669,7 +669,8 @@ impl CreateView {
             ui.horizontal(|ui| {
                 let can = valid.is_ok() && source_ok;
                 if ui
-                    .add_enabled(can, egui::Button::new(RichText::new(format!("Create {}", self.kind.label())).strong().size(16.0)))
+                    .add_enabled_ui(can, |ui| widgets::primary_button(ui, format!("{}  Create {}", theme::icon::PLUS, self.kind.label())))
+                    .inner
                     .clicked()
                 {
                     let env = sh.env();
