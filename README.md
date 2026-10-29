@@ -1,0 +1,121 @@
+# ProxmoxPanel
+
+A standalone desktop app for managing Proxmox VE clusters on **Windows and Linux**, written in Rust ([egui](https://github.com/emilk/egui)).
+
+It's a port of the `proxmoxopen` HostBill provisioning module. The provisioning logic (placement, create, rebuild, IPAM, cloud-init, bandwidth accounting, tenant isolation, diagnostics) now runs in a native GUI that talks directly to the Proxmox VE API. It doesn't need HostBill, PHP, a web server or a database.
+
+## Features
+
+| Area | What you get |
+|---|---|
+| **Connections** | Multiple server profiles. You can log in with an API token or with a password ticket (TOTP 2FA supported, auto-renewed). TLS can verify against the OS trust store, **pin the certificate's SHA-256 fingerprint** (with a "fetch from server" button), or skip verification for labs. |
+| **Secrets** | Tokens and passwords are kept in a local vault encrypted with Argon2id + XChaCha20-Poly1305 under a master password. Logs are redacted before anything is written. |
+| **Diagnostics** | Shows the Proxmox version, cluster/quorum, node status, which storages accept each content type (`images`, `rootdir`, `iso`, `vztmpl`, `backup`, `snippets`), and the credential's effective privileges on `/`. |
+| **Dashboard** | Cluster totals, node cards (CPU/RAM/root FS), storage usage and recent task failures. |
+| **Guests** | Sortable, filterable list with quick power actions, plus a navigation tree per node. |
+| **Guest detail** | Summary (live status, agent/LXC IP addresses, traffic for the billing period, RRD graphs). Hardware (CPU/memory/options/tags/notes, disk resize/move/add/detach, ISO insert/eject, boot order, raw config). Network (bridge/VLAN/rate/firewall/MAC, LXC addressing). Cloud-Init. Snapshots. Backups (back up/restore/protect/delete). Firewall (options, rules, reorder, log). Guest agent (OS/filesystems, set password, run commands). Task history. Manage (password reset, migrate, clone, **rebuild**, HA, pool, template, clear lock, destroy). |
+| **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local) or from an ISO, and containers from a `vztmpl`. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. |
+| **Auto-placement** | Ported from the module. Nodes without enough free RAM are skipped. Each remaining node's storage is filtered by content type and free space. The survivors are ordered by your RAM/CPU/Disk priority and picked *dense*, *sparse* or *random*. |
+| **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. |
+| **Rebuild / reinstall** | Replaces a guest's disks with a fresh template while keeping its VMID, name, resources, NICs (**MAC addresses**), cloud-init network config and pool. You confirm by typing the VMID. |
+| **Storage** | Browse content, upload ISOs/templates with progress, download from a URL (with optional checksum), browse and download appliance templates, delete volumes. |
+| **Datacenter** | Scheduled backup jobs (create/toggle/run now/delete), storage replication, HA resources and HA status. |
+| **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a `@pve` user with a role on `/pool/<pool>` only, the module's least-privilege client model. |
+| **Jobs** | Every multi-step operation runs in the background and logs each step and the exact error it stopped on, including the tail of the Proxmox task log. No silent failures. |
+| **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
+
+### What was not ported
+
+These parts were HostBill-specific and have no meaning in a standalone tool: invoices and metered billing, automatic suspend/unsuspend for overdue accounts or bandwidth overage, client-area pages and widgets, product configuration, and the legacy v1→v2 product migration.
+
+The Go node daemon, which cleared stale create locks, is replaced by **Manage → Clear lock**. It uses the API's `skiplock`, which Proxmox only honours for `root@pam`.
+
+## Install
+
+| Platform | File | How |
+|---|---|---|
+| **Windows 10/11 (x64)** | `ProxmoxPanel-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn because the installer isn't code-signed: click *More info → Run anyway*. |
+| Windows, no install | `proxmoxpanel-<ver>-windows-x86_64-portable.zip` | Unzip and run `proxmoxpanel.exe`. |
+| **Debian / Ubuntu / Mint** | `proxmoxpanel_<ver>_amd64.deb` | `sudo apt install ./proxmoxpanel_<ver>_amd64.deb` (use `apt`, not `dpkg -i`, so dependencies are pulled in). Then launch *ProxmoxPanel* from the app menu or run `proxmoxpanel`. |
+| Other Linux | `proxmoxpanel-<ver>-linux-x86_64.tar.gz` | Extract and run `./proxmoxpanel`. |
+
+Uninstalling keeps your data (servers, encrypted vault, IPAM database). See *Data locations* below to remove it too.
+
+To build all installers yourself: `packaging/build-installers.sh` (Linux host; the Windows setup is cross-compiled and needs `mingw-w64`, `nsis` and `rustup target add x86_64-pc-windows-gnu`). CI also builds them on every push to `main`; download them from the workflow run's artifacts.
+
+## Build from source
+
+You need Rust 1.88 or newer (`rustup` recommended).
+
+```bash
+cargo build --release
+```
+
+The binary is `target/release/proxmoxpanel` (`proxmoxpanel.exe` on Windows). It is a single self-contained executable.
+
+- **Linux runtime:** needs an X11 or Wayland desktop with OpenGL or Vulkan (on Debian/Ubuntu: `libxkbcommon-x11-0 libgl1`), and `xdg-desktop-portal` for file pickers. SPICE needs `virt-viewer`.
+- **Windows:** build natively with the MSVC toolchain, or cross-compile from Linux:
+
+  ```bash
+  rustup target add x86_64-pc-windows-gnu
+  ```
+
+  ```bash
+  sudo apt install gcc-mingw-w64-x86-64
+  ```
+
+  ```bash
+  cargo build --release --target x86_64-pc-windows-gnu
+  ```
+
+CI (`.github/workflows/build.yml`) runs format, clippy and tests, then builds release binaries for both platforms.
+
+## First run
+
+1. Choose a master password. It encrypts stored credentials.
+2. **Servers → Add server**. Enter the host and port (8006). For auth, an API token is recommended: create one under *Datacenter → Permissions → API Tokens*. For TLS, keep *Pin certificate* and click **Fetch from server**. Compare the fingerprint with *Node → System → Certificates* or with `pvenode cert info`.
+3. **Test connection** to see diagnostics, then **Save & connect**.
+
+Browser consoles need you to be logged in to the Proxmox web UI in that browser. API tokens can't open consoles.
+
+## Data locations
+
+| | Linux | Windows |
+|---|---|---|
+| Config + vault | `~/.config/proxmoxpanel/` | `%APPDATA%\ProxmoxPanel\ProxmoxPanel\config\` |
+| IPAM database, logs | `~/.local/share/proxmoxpanel/` | `%APPDATA%\ProxmoxPanel\ProxmoxPanel\data\` |
+
+**Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it.
+
+Logs rotate daily and are kept for 14 days. Set `PXP_LOG=debug` for verbose logs.
+
+## Trying it without a cluster
+
+`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules, backups, IPAM-friendly networking and a guest agent. Start it with:
+
+```bash
+python3 tools/mock_pve.py --port 8006
+```
+
+Then add a server `127.0.0.1:8006` and log in with:
+
+- user `root@pam`, password `mockpass`, or
+- token `root@pam!panel`, secret `mocktoken`, or
+- user `totp@pam`, password `mockpass`, TOTP `123456`.
+
+## Project layout
+
+```
+src/
+  api/          Proxmox API client (auth, TLS pinning, task waiting, uploads) and typed responses
+  ops/          provisioning logic ported from the module:
+                create, rebuild, placement, guest ops, diagnostics, bandwidth, tenant
+  ipam.rs       local IP address management
+  vault.rs      encrypted credential storage
+  jobs.rs       background jobs with step logs
+  rt.rs         UI <-> tokio bridge (Fetch handles)
+  ui/           egui views
+tools/mock_pve.py   mock Proxmox VE API for development/demo
+```
+
+Run the unit tests with `cargo test`. They cover IPAM allocation rules, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto round trip and fingerprint parsing.
