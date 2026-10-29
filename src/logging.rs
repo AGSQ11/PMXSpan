@@ -80,13 +80,15 @@ pub fn init(paths: &AppPaths) {
     let file = OpenOptions::new()
         .create(true)
         .append(true)
-        .open(paths.log_dir.join(format!("proxmoxpanel-{day}.log")))
+        .open(paths.log_dir.join(format!("pmxspan-{day}.log")))
         .ok()
         .map(|f| Arc::new(Mutex::new(f)));
     prune_old_logs(paths, 14);
 
-    let filter =
-        EnvFilter::try_from_env("PXP_LOG").unwrap_or_else(|_| EnvFilter::new("info,proxmox_panel=debug,wgpu=warn,eframe=warn,egui=warn"));
+    // PXP_LOG is the variable's name from before the rename; still honoured.
+    let filter = EnvFilter::try_from_env("PMXSPAN_LOG")
+        .or_else(|_| EnvFilter::try_from_env("PXP_LOG"))
+        .unwrap_or_else(|_| EnvFilter::new("info,pmxspan=debug,wgpu=warn,eframe=warn,egui=warn"));
     let _ = tracing_subscriber::fmt()
         .with_env_filter(filter)
         .with_ansi(false)

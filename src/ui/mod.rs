@@ -470,7 +470,7 @@ impl App {
 
     /// Breadcrumb for the current view: (context, title).
     fn crumbs(&self) -> (String, String) {
-        let cluster = self.session.as_ref().map(|s| s.shared.profile.display_name()).unwrap_or_else(|| "ProxmoxPanel".into());
+        let cluster = self.session.as_ref().map(|s| s.shared.profile.display_name()).unwrap_or_else(|| "PMXSpan".into());
         let title = match &self.nav {
             Nav::Dashboard => "Dashboard".to_string(),
             Nav::Guests => "Guests".into(),
@@ -632,7 +632,7 @@ impl App {
                     egui::FontId::proportional(17.0),
                     p.on_accent,
                 );
-                ui.label(theme::bold("ProxmoxPanel", 15.5));
+                ui.label(theme::bold("PMXSpan", 15.5));
             });
             ui.add_space(10.0);
             self.cluster_card(ui, actions);

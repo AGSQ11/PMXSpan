@@ -109,7 +109,7 @@ impl PveClient {
             .http1_only()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(profile.request_timeout_secs.max(5)))
-            .user_agent(concat!("ProxmoxPanel/", env!("CARGO_PKG_VERSION")))
+            .user_agent(concat!("PMXSpan/", env!("CARGO_PKG_VERSION")))
             .no_proxy();
         match profile.tls {
             TlsMode::System => {}

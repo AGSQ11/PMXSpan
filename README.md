@@ -1,4 +1,4 @@
-# ProxmoxPanel
+# PMXSpan
 
 A standalone desktop app for managing Proxmox VE clusters on **Windows and Linux**, written in Rust ([egui](https://github.com/emilk/egui)).
 
@@ -125,10 +125,10 @@ Stale create locks are cleared with **Manage → Clear lock**. It uses the API's
 
 | Platform | File | How |
 |---|---|---|
-| **Windows 10/11 (x64)** | `ProxmoxPanel-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn because the installer isn't code-signed: click *More info → Run anyway*. |
-| Windows, no install | `proxmoxpanel-<ver>-windows-x86_64-portable.zip` | Unzip and run `proxmoxpanel.exe`. |
-| **Debian / Ubuntu / Mint** | `proxmoxpanel_<ver>_amd64.deb` | `sudo apt install ./proxmoxpanel_<ver>_amd64.deb` (use `apt`, not `dpkg -i`, so dependencies are pulled in). Then launch *ProxmoxPanel* from the app menu or run `proxmoxpanel`. |
-| Other Linux | `proxmoxpanel-<ver>-linux-x86_64.tar.gz` | Extract and run `./proxmoxpanel`. |
+| **Windows 10/11 (x64)** | `PMXSpan-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn because the installer isn't code-signed: click *More info → Run anyway*. |
+| Windows, no install | `pmxspan-<ver>-windows-x86_64-portable.zip` | Unzip and run `pmxspan.exe`. |
+| **Debian / Ubuntu / Mint** | `pmxspan_<ver>_amd64.deb` | `sudo apt install ./pmxspan_<ver>_amd64.deb` (use `apt`, not `dpkg -i`, so dependencies are pulled in). Then launch *PMXSpan* from the app menu or run `pmxspan`. |
+| Other Linux | `pmxspan-<ver>-linux-x86_64.tar.gz` | Extract and run `./pmxspan`. |
 
 Uninstalling keeps your data (servers, encrypted vault, IPAM database). See *Data locations* below to remove it too.
 
@@ -142,7 +142,7 @@ You need Rust 1.88 or newer (`rustup` recommended).
 cargo build --release
 ```
 
-The binary is `target/release/proxmoxpanel` (`proxmoxpanel.exe` on Windows). It is a single self-contained executable.
+The binary is `target/release/pmxspan` (`pmxspan.exe` on Windows). It is a single self-contained executable.
 
 - **Linux runtime:** needs an X11 or Wayland desktop with OpenGL or Vulkan (on Debian/Ubuntu: `libxkbcommon-x11-0 libgl1`), and `xdg-desktop-portal` for file pickers. SPICE needs `virt-viewer`.
 - **Windows:** build natively with the MSVC toolchain, or cross-compile from Linux:
@@ -173,12 +173,14 @@ Browser consoles need you to be logged in to the Proxmox web UI in that browser.
 
 | | Linux | Windows |
 |---|---|---|
-| Config, vault, OS catalog | `~/.config/proxmoxpanel/` | `%APPDATA%\ProxmoxPanel\ProxmoxPanel\config\` |
-| IPAM database, logs | `~/.local/share/proxmoxpanel/` | `%APPDATA%\ProxmoxPanel\ProxmoxPanel\data\` |
+| Config, vault, OS catalog | `~/.config/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\config\` |
+| IPAM database, logs | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
+
+Upgrading from a release named **ProxmoxPanel**: your servers, vault, IP database and catalog are moved to the new folders on first start, the Windows installer removes the old installation, and the `.deb` replaces the old package.
 
 **Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it.
 
-Logs rotate daily and are kept for 14 days. Set `PXP_LOG=debug` for verbose logs.
+Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose logs.
 
 ## Setting up the OS image catalog
 

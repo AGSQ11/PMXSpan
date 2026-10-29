@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
+// Fixed format identifier from the app's first release (under its earlier
+// name); changing it would make every existing vault unreadable.
 const VERIFIER_PLAINTEXT: &[u8] = b"proxmoxpanel-vault-v1";
 
 #[derive(Serialize, Deserialize, Default)]

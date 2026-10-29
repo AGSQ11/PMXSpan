@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Builds a Debian/Ubuntu package from an already-built release binary.
 #
-#   packaging/linux/build-deb.sh [path/to/proxmoxpanel] [out-dir]
+#   packaging/linux/build-deb.sh [path/to/pmxspan] [out-dir]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
-BIN="${1:-$ROOT/target/release/proxmoxpanel}"
+BIN="${1:-$ROOT/target/release/pmxspan}"
 OUT="${2:-$ROOT/dist}"
 VERSION="$(grep -m1 '^version' "$ROOT/Cargo.toml" | cut -d'"' -f2)"
 ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
@@ -14,26 +14,29 @@ ARCH="$(dpkg --print-architecture 2>/dev/null || echo amd64)"
 
 STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
-PKG="$STAGE/proxmoxpanel_${VERSION}_${ARCH}"
+PKG="$STAGE/pmxspan_${VERSION}_${ARCH}"
 
-install -Dm755 "$BIN" "$PKG/usr/bin/proxmoxpanel"
-install -Dm644 "$ROOT/packaging/assets/proxmoxpanel.png" "$PKG/usr/share/icons/hicolor/256x256/apps/proxmoxpanel.png"
-install -Dm644 "$ROOT/packaging/linux/proxmoxpanel.desktop" "$PKG/usr/share/applications/proxmoxpanel.desktop"
-install -Dm644 "$ROOT/README.md" "$PKG/usr/share/doc/proxmoxpanel/README.md"
+install -Dm755 "$BIN" "$PKG/usr/bin/pmxspan"
+install -Dm644 "$ROOT/packaging/assets/pmxspan.png" "$PKG/usr/share/icons/hicolor/256x256/apps/pmxspan.png"
+install -Dm644 "$ROOT/packaging/linux/pmxspan.desktop" "$PKG/usr/share/applications/pmxspan.desktop"
+install -Dm644 "$ROOT/README.md" "$PKG/usr/share/doc/pmxspan/README.md"
 for f in "$ROOT"/assets/fonts/*-LICENSE.txt; do
-  install -Dm644 "$f" "$PKG/usr/share/doc/proxmoxpanel/licenses/$(basename "$f")"
+  install -Dm644 "$f" "$PKG/usr/share/doc/pmxspan/licenses/$(basename "$f")"
 done
 
 mkdir -p "$PKG/DEBIAN"
 cat > "$PKG/DEBIAN/control" <<EOF
-Package: proxmoxpanel
+Package: pmxspan
 Version: $VERSION
 Section: admin
 Priority: optional
 Architecture: $ARCH
 Depends: libxkbcommon-x11-0, libgl1 | libvulkan1, xdg-utils
 Recommends: xdg-desktop-portal, virt-viewer
-Maintainer: ProxmoxPanel <noreply@localhost>
+Maintainer: PMXSpan <noreply@localhost>
+Replaces: proxmoxpanel
+Breaks: proxmoxpanel
+Conflicts: proxmoxpanel
 Description: Standalone desktop manager for Proxmox VE clusters
  Manage Proxmox VE nodes, VMs and containers: provisioning with
  auto-placement and IPAM, rebuilds, snapshots, backups, firewall,
@@ -48,4 +51,4 @@ EOF
 chmod 755 "$PKG/DEBIAN/postinst"
 
 mkdir -p "$OUT"
-dpkg-deb --build --root-owner-group "$PKG" "$OUT/proxmoxpanel_${VERSION}_${ARCH}.deb"
+dpkg-deb --build --root-owner-group "$PKG" "$OUT/pmxspan_${VERSION}_${ARCH}.deb"

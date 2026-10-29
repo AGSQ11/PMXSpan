@@ -176,7 +176,7 @@ impl SettingsView {
                 crate::logging::clear_memory();
             }
         });
-        widgets::muted(ui, "Credentials are redacted before anything is written. Set PXP_LOG=debug for more detail.");
+        widgets::muted(ui, "Credentials are redacted before anything is written. Set PMXSPAN_LOG=debug for more detail.");
         let f = self.log_filter.to_lowercase();
         let lines: Vec<String> =
             crate::logging::recent_lines().into_iter().filter(|l| f.is_empty() || l.to_lowercase().contains(&f)).collect();

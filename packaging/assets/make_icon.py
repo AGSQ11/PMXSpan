@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Renders the app icon (same design as src/ui/icon.rs) to a PPM+alpha pair,
-then ImageMagick turns it into proxmoxpanel.png and proxmoxpanel.ico.
+then ImageMagick turns it into pmxspan.png and pmxspan.ico.
 
     python3 packaging/assets/make_icon.py
 """
@@ -36,8 +36,8 @@ def main():
     raw = os.path.join(HERE, "icon.rgba")
     with open(raw, "wb") as f:
         f.write(render(n))
-    png = os.path.join(HERE, "proxmoxpanel.png")
-    ico = os.path.join(HERE, "proxmoxpanel.ico")
+    png = os.path.join(HERE, "pmxspan.png")
+    ico = os.path.join(HERE, "pmxspan.ico")
     subprocess.run(["convert", "-size", f"{n}x{n}", "-depth", "8", f"rgba:{raw}", png], check=True)
     subprocess.run(["convert", png, "-define", "icon:auto-resize=256,128,64,48,32,16", ico], check=True)
     os.remove(raw)

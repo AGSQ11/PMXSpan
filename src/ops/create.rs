@@ -399,7 +399,7 @@ pub fn validate(spec: &CreateSpec) -> anyhow::Result<()> {
 fn description(spec: &CreateSpec, settings: &Settings) -> String {
     let mut d = spec.description.trim().to_string();
     if settings.tag_managed_guests {
-        let marker = format!("Managed by ProxmoxPanel ({})", chrono::Local::now().format("%Y-%m-%d"));
+        let marker = format!("Managed by PMXSpan ({})", chrono::Local::now().format("%Y-%m-%d"));
         d = if d.is_empty() { marker } else { format!("{d}\n\n{marker}") };
     }
     d

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """A tiny in-memory imitation of the Proxmox VE API, for developing and
-demoing ProxmoxPanel without a real cluster.
+demoing PMXSpan without a real cluster.
 
     python3 tools/mock_pve.py --port 8006
 

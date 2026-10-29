@@ -27,11 +27,11 @@ jobs:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact: proxmoxpanel-linux-x86_64
-            bin: target/release/proxmoxpanel
+            artifact: pmxspan-linux-x86_64
+            bin: target/release/pmxspan
           - os: windows-latest
-            artifact: proxmoxpanel-windows-x86_64
-            bin: target/release/proxmoxpanel.exe
+            artifact: pmxspan-windows-x86_64
+            bin: target/release/pmxspan.exe
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -57,5 +57,5 @@ jobs:
       - run: packaging/build-installers.sh
       - uses: actions/upload-artifact@v4
         with:
-          name: proxmoxpanel-installers
+          name: pmxspan-installers
           path: dist/*

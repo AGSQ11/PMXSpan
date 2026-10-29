@@ -36,7 +36,7 @@ impl UnlockView {
                 p.on_accent,
             );
             ui.add_space(10.0);
-            ui.label(theme::bold("ProxmoxPanel", 26.0));
+            ui.label(theme::bold("PMXSpan", 26.0));
             ui.label(RichText::new("Desktop manager for Proxmox VE").color(p.muted));
             ui.add_space(22.0);
             ui.set_max_width(420.0);

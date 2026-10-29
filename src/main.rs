@@ -1,4 +1,4 @@
-//! ProxmoxPanel — a standalone desktop manager for Proxmox VE clusters.
+//! PMXSpan — a standalone desktop manager for Proxmox VE clusters.
 //!
 //! A self-contained GUI application that talks directly to the Proxmox VE API:
 //! no web server, no database, no agents on the nodes.
@@ -23,11 +23,11 @@ fn main() -> eframe::Result {
 
     let paths = config::AppPaths::resolve();
     logging::init(&paths);
-    tracing::info!("ProxmoxPanel {} starting", env!("CARGO_PKG_VERSION"));
+    tracing::info!("PMXSpan {} starting", env!("CARGO_PKG_VERSION"));
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
-            .with_title("ProxmoxPanel")
+            .with_title("PMXSpan")
             .with_inner_size([1360.0, 860.0])
             .with_min_inner_size([960.0, 600.0])
             .with_icon(ui::icon::app_icon()),
@@ -35,7 +35,7 @@ fn main() -> eframe::Result {
     };
 
     eframe::run_native(
-        "ProxmoxPanel",
+        "PMXSpan",
         options,
         Box::new(move |cc| {
             rt::init(cc.egui_ctx.clone());

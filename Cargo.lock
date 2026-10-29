@@ -2982,6 +2982,40 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
 
 [[package]]
+name = "pmxspan"
+version = "0.4.0"
+dependencies = [
+ "anyhow",
+ "argon2",
+ "base64 0.22.1",
+ "bytes",
+ "chacha20poly1305",
+ "chrono",
+ "directories",
+ "eframe",
+ "egui",
+ "egui_plot",
+ "futures-util",
+ "hex",
+ "hyper",
+ "ipnet",
+ "parking_lot 0.13.0",
+ "rand",
+ "reqwest",
+ "rfd",
+ "rustls",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "urlencoding",
+ "webbrowser",
+ "winresource",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3112,40 +3146,6 @@ name = "profiling"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d595e54a326bc53c1c197b32d295e14b169e3cfeaa8dc82b529f947fba6bcf5"
-
-[[package]]
-name = "proxmox-panel"
-version = "0.3.0"
-dependencies = [
- "anyhow",
- "argon2",
- "base64 0.22.1",
- "bytes",
- "chacha20poly1305",
- "chrono",
- "directories",
- "eframe",
- "egui",
- "egui_plot",
- "futures-util",
- "hex",
- "hyper",
- "ipnet",
- "parking_lot 0.13.0",
- "rand",
- "reqwest",
- "rfd",
- "rustls",
- "serde",
- "serde_json",
- "sha2",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "urlencoding",
- "webbrowser",
- "winresource",
-]
 
 [[package]]
 name = "pxfm"

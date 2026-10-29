@@ -254,7 +254,7 @@ async fn sync_ipset(env: &Env, ctx: &JobCtx, g: &GuestRef, n: u32, cfg: &Map<Str
     let sets = client.get_list(&base).await.context("listing ipsets")?;
     if !sets.iter().any(|s| s.s("name") == name) {
         client
-            .post(&base, &Params::new().set("name", &name).set("comment", format!("Only allow assigned IPs on net{n} (ProxmoxPanel)")))
+            .post(&base, &Params::new().set("name", &name).set("comment", format!("Only allow assigned IPs on net{n} (PMXSpan)")))
             .await
             .with_context(|| format!("creating ipset {name}"))?;
     }

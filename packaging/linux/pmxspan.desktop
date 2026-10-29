@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=ProxmoxPanel
+Name=PMXSpan
 GenericName=Proxmox VE Manager
 Comment=Manage Proxmox VE clusters, VMs and containers
-Exec=proxmoxpanel
-Icon=proxmoxpanel
+Exec=pmxspan
+Icon=pmxspan
 Terminal=false
 Categories=System;Network;Utility;
 Keywords=proxmox;pve;vm;virtualization;lxc;qemu;
-StartupWMClass=ProxmoxPanel
+StartupWMClass=PMXSpan

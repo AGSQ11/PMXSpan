@@ -21,7 +21,11 @@ impl AppPaths {
             let base = dir.join("data");
             return Self::from_base(base);
         }
-        if let Some(pd) = directories::ProjectDirs::from("com", "ProxmoxPanel", "ProxmoxPanel") {
+        if let Some(pd) = directories::ProjectDirs::from("com", "PMXSpan", "PMXSpan") {
+            if let Some(old) = directories::ProjectDirs::from("com", "ProxmoxPanel", "ProxmoxPanel") {
+                migrate_dir(old.config_dir(), pd.config_dir());
+                migrate_dir(old.data_dir(), pd.data_dir());
+            }
             let config_dir = pd.config_dir().to_path_buf();
             let data_dir = pd.data_dir().to_path_buf();
             let log_dir = data_dir.join("logs");
@@ -30,7 +34,8 @@ impl AppPaths {
             }
             return Self { config_dir, data_dir, log_dir };
         }
-        Self::from_base(PathBuf::from(".proxmoxpanel"))
+        migrate_dir(Path::new(".proxmoxpanel"), Path::new(".pmxspan"));
+        Self::from_base(PathBuf::from(".pmxspan"))
     }
 
     fn from_base(base: PathBuf) -> Self {
@@ -51,6 +56,41 @@ impl AppPaths {
     pub fn catalog_file(&self) -> PathBuf {
         self.config_dir.join("catalog.json")
     }
+}
+
+/// Moves data left by the app's earlier name (ProxmoxPanel) to the new
+/// location, once: only when the old directory exists and the new one does not.
+fn migrate_dir(old: &Path, new: &Path) {
+    if new.exists() || !old.is_dir() {
+        return;
+    }
+    if let Some(parent) = new.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    if std::fs::rename(old, new).is_err() {
+        // Different volume or locked: copy instead and leave the old data in place.
+        let _ = copy_dir(old, new);
+    }
+    // Remove the old app folders once empty (Windows: %APPDATA%\ProxmoxPanel\ProxmoxPanel).
+    for dir in old.ancestors().skip(1).take(2) {
+        if dir.file_name().is_some_and(|n| n == "ProxmoxPanel") {
+            let _ = std::fs::remove_dir(dir);
+        }
+    }
+}
+
+fn copy_dir(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_dir(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -224,7 +264,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             task_timeout_secs: 3600,
             tag_managed_guests: true,
-            managed_tag: "proxmoxpanel".into(),
+            managed_tag: "pmxspan".into(),
             download_stall_secs: 180,
             download_max_wait_secs: 1800,
             download_min_bytes: 0,
@@ -281,4 +321,32 @@ pub fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     }
     std::fs::rename(&tmp, path)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::migrate_dir;
+
+    #[test]
+    fn migrates_old_data_once() {
+        let root = std::env::temp_dir().join(format!("pmxspan-migrate-{}", std::process::id()));
+        let old = root.join("ProxmoxPanel").join("ProxmoxPanel").join("config");
+        let new = root.join("PMXSpan").join("PMXSpan").join("config");
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("vault.json"), b"secret").unwrap();
+
+        migrate_dir(&old, &new);
+        assert_eq!(std::fs::read(new.join("vault.json")).unwrap(), b"secret");
+        assert!(!old.exists());
+        // Empty old app folders are cleaned up.
+        assert!(!root.join("ProxmoxPanel").exists());
+
+        // Existing new data is never overwritten.
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("vault.json"), b"stale").unwrap();
+        migrate_dir(&old, &new);
+        assert_eq!(std::fs::read(new.join("vault.json")).unwrap(), b"secret");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

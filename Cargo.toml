@@ -1,6 +1,6 @@
 [package]
-name = "proxmox-panel"
-version = "0.3.0"
+name = "pmxspan"
+version = "0.4.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Standalone desktop manager for Proxmox VE clusters"
@@ -8,7 +8,7 @@ readme = "README.md"
 publish = false
 
 [[bin]]
-name = "proxmoxpanel"
+name = "pmxspan"
 path = "src/main.rs"
 
 [dependencies]
