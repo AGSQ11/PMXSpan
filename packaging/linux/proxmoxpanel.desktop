@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ProxmoxPanel
+GenericName=Proxmox VE Manager
+Comment=Manage Proxmox VE clusters, VMs and containers
+Exec=proxmoxpanel
+Icon=proxmoxpanel
+Terminal=false
+Categories=System;Network;Utility;
+Keywords=proxmox;pve;vm;virtualization;lxc;qemu;
+StartupWMClass=ProxmoxPanel

@@ -3,3 +3,4 @@
 /portable
 *.log
 __pycache__/
+/dist

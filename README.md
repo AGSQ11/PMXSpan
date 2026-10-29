@@ -30,7 +30,20 @@ These parts were HostBill-specific and have no meaning in a standalone tool: inv
 
 The Go node daemon, which cleared stale create locks, is replaced by **Manage → Clear lock**. It uses the API's `skiplock`, which Proxmox only honours for `root@pam`.
 
-## Download / build
+## Install
+
+| Platform | File | How |
+|---|---|---|
+| **Windows 10/11 (x64)** | `ProxmoxPanel-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn because the installer isn't code-signed: click *More info → Run anyway*. |
+| Windows, no install | `proxmoxpanel-<ver>-windows-x86_64-portable.zip` | Unzip and run `proxmoxpanel.exe`. |
+| **Debian / Ubuntu / Mint** | `proxmoxpanel_<ver>_amd64.deb` | `sudo apt install ./proxmoxpanel_<ver>_amd64.deb` (use `apt`, not `dpkg -i`, so dependencies are pulled in). Then launch *ProxmoxPanel* from the app menu or run `proxmoxpanel`. |
+| Other Linux | `proxmoxpanel-<ver>-linux-x86_64.tar.gz` | Extract and run `./proxmoxpanel`. |
+
+Uninstalling keeps your data (servers, encrypted vault, IPAM database). See *Data locations* below to remove it too.
+
+To build all installers yourself: `packaging/build-installers.sh` (Linux host; the Windows setup is cross-compiled and needs `mingw-w64`, `nsis` and `rustup target add x86_64-pc-windows-gnu`). CI also builds them on every push to `main`; download them from the workflow run's artifacts.
+
+## Build from source
 
 You need Rust 1.88 or newer (`rustup` recommended).
 
