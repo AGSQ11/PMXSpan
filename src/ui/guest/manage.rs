@@ -35,6 +35,8 @@ pub struct ManageTab {
     clone_storage: Option<String>,
     next_id: Fetch<u64>,
     rb_template: String,
+    rb_catalog: bool,
+    rb_catalog_id: Option<String>,
     rb_password: String,
     rb_show: bool,
     rb_keys: String,
@@ -47,7 +49,7 @@ pub struct ManageTab {
 }
 
 impl ManageTab {
-    pub fn ui(&mut self, ui: &mut egui::Ui, gc: &GCtx, _actions: &mut Actions) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, gc: &GCtx, actions: &mut Actions) {
         let g = gc.g.clone();
         let sh = gc.sh;
         let qemu = g.kind == GuestKind::Qemu;
@@ -68,7 +70,10 @@ impl ManageTab {
                     sh.spawn(gc.title("Unlock"), move |ctx| async move { guest::unlock(&c, &ctx, &gr).await });
                 }
                 Act::Rebuild => {
-                    let source = if qemu {
+                    let entry = self.rb_catalog_id.as_ref().and_then(|id| sh.catalog.lock().entries.iter().find(|e| &e.id == id).cloned());
+                    let source = if let (true, Some(entry)) = (self.rb_catalog, entry) {
+                        RebuildSource::Catalog { entry: Box::new(entry) }
+                    } else if qemu {
                         let tid: u64 = self.rb_template.split_whitespace().next().and_then(|s| s.parse().ok()).unwrap_or(0);
                         let tnode = sh.find_guest(GuestKind::Qemu, tid).map(|r| r.node.clone()).unwrap_or_default();
                         RebuildSource::QemuTemplate { node: tnode, vmid: tid }
@@ -196,9 +201,17 @@ impl ManageTab {
             widgets::section(ui, "Rebuild / reinstall");
             widgets::muted(
                 ui,
-                "Replaces the guest's disks with a fresh copy of a template. VMID, name, resources, NICs (MACs), \
-                 cloud-init network config and pool are kept. ALL DATA ON THE GUEST'S DISKS IS LOST.",
+                "Replaces the guest's disks with a fresh copy of a template or an OS catalog image. VMID, name, resources, \
+                 NICs (MACs), IP addresses and pool are kept. ALL DATA ON THE GUEST'S DISKS IS LOST.",
             );
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut self.rb_catalog, false, if qemu { "From a template VM" } else { "From a template on storage" });
+                ui.radio_value(&mut self.rb_catalog, true, "From the OS image catalog");
+            });
+            let catalog_entries = sh.catalog.lock().for_virt(!qemu);
+            if self.rb_catalog_id.as_ref().is_some_and(|id| !catalog_entries.iter().any(|e| &e.id == id)) {
+                self.rb_catalog_id = None;
+            }
             let options: Vec<String> = if qemu {
                 sh.templates(GuestKind::Qemu).iter().map(|t| format!("{} {}", t.vmid, t.display_name())).collect()
             } else {
@@ -221,8 +234,44 @@ impl ManageTab {
                 self.vztmpls.ok().cloned().unwrap_or_default()
             };
             egui::Grid::new("rb-form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label(if qemu { "Template VM" } else { "Container template" });
-                widgets::combo(ui, "rb-tpl", &mut self.rb_template, &options, 360.0);
+                if self.rb_catalog {
+                    ui.label("Catalog image");
+                    ui.vertical(|ui| {
+                        if catalog_entries.is_empty() {
+                            ui.horizontal(|ui| {
+                                ui.label(RichText::new("No matching images in the catalog.").color(theme::WARN));
+                                if ui.link("Edit the OS image catalog →").clicked() {
+                                    actions.nav(crate::ui::Nav::Catalog);
+                                }
+                            });
+                        } else {
+                            let label = self
+                                .rb_catalog_id
+                                .as_ref()
+                                .and_then(|id| catalog_entries.iter().find(|e| &e.id == id))
+                                .map(|e| e.label.clone())
+                                .unwrap_or_else(|| "(choose image)".into());
+                            egui::ComboBox::from_id_salt("rb-cat").selected_text(label).width(360.0).show_ui(ui, |ui| {
+                                for e in &catalog_entries {
+                                    ui.selectable_value(&mut self.rb_catalog_id, Some(e.id.clone()), &e.label).on_hover_text(&e.url);
+                                }
+                            });
+                        }
+                        if crate::ops::catalog::configured_storages(&sh.profile, !qemu).is_empty() {
+                            ui.label(
+                                RichText::new("No catalog download storage is set for this server (Servers → Edit).").color(theme::WARN),
+                            );
+                        } else {
+                            widgets::muted(
+                                ui,
+                                "The image is downloaded before anything is touched; a failed download leaves the guest as it is.",
+                            );
+                        }
+                    });
+                } else {
+                    ui.label(if qemu { "Template VM" } else { "Container template" });
+                    widgets::combo(ui, "rb-tpl", &mut self.rb_template, &options, 360.0);
+                }
                 ui.end_row();
                 ui.label(if qemu { "New password" } else { "Root password" });
                 widgets::password_field(ui, &mut self.rb_password, &mut self.rb_show, "rb-pw");
@@ -241,7 +290,16 @@ impl ManageTab {
                 }
                 ui.end_row();
             });
-            let ok = !self.rb_template.is_empty() && (qemu || !self.rb_password.is_empty() || !self.rb_keys.trim().is_empty());
+            let source_label = if self.rb_catalog {
+                self.rb_catalog_id
+                    .as_ref()
+                    .and_then(|id| catalog_entries.iter().find(|e| &e.id == id))
+                    .map(|e| format!("catalog image '{}'", e.label))
+                    .unwrap_or_default()
+            } else {
+                self.rb_template.clone()
+            };
+            let ok = !source_label.is_empty() && (qemu || !self.rb_password.is_empty() || !self.rb_keys.trim().is_empty());
             if ui.add_enabled(ok, egui::Button::new(RichText::new("Rebuild…").color(theme::ERR).strong())).clicked() {
                 self.confirm = Some(
                     Confirm::new(
@@ -250,7 +308,7 @@ impl ManageTab {
                             "Rebuild {} '{}' from {}? Every disk of this guest will be destroyed.",
                             g.vmid,
                             gc.res.display_name(),
-                            self.rb_template
+                            source_label
                         ),
                         Act::Rebuild,
                     )

@@ -203,6 +203,28 @@ impl ServersView {
             ui.label("Request timeout");
             ui.add(egui::DragValue::new(&mut draft.request_timeout_secs).range(5..=600).suffix(" s"));
             ui.end_row();
+            ui.label("Catalog: VM images");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft.catalog_qemu_storage)
+                        .hint_text("storage with `import` content")
+                        .desired_width(200.0),
+                );
+                ui.label("fallback");
+                ui.add(egui::TextEdit::singleline(&mut draft.catalog_qemu_storage_fallback).hint_text("optional").desired_width(140.0));
+            });
+            ui.end_row();
+            ui.label("Catalog: CT templates");
+            ui.horizontal(|ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut draft.catalog_lxc_storage)
+                        .hint_text("storage with `vztmpl` content")
+                        .desired_width(200.0),
+                );
+                ui.label("fallback");
+                ui.add(egui::TextEdit::singleline(&mut draft.catalog_lxc_storage_fallback).hint_text("optional").desired_width(140.0));
+            });
+            ui.end_row();
             ui.label("Notes");
             ui.add(egui::TextEdit::multiline(&mut draft.notes).desired_rows(2));
             ui.end_row();

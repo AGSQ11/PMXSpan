@@ -5,11 +5,12 @@
 //! releases them again, and a failure after the guest exists says so
 //! explicitly instead of pretending nothing happened.
 
+use super::catalog::{self, CatalogEntry};
 use super::guest::{self, run_task};
 use super::placement::{self, PlacementRequest};
-use crate::api::types::{GuestKind, GuestRef};
+use crate::api::types::{GuestKind, GuestRef, NodeStorage};
 use crate::api::{Params, PveClient};
-use crate::config::Settings;
+use crate::config::{ServerProfile, Settings};
 use crate::ipam::{AllocRequest, Allocation, IpamDb};
 use crate::jobs::JobCtx;
 use crate::util::{PropString, ValueExt, generate_mac, sanitize_hostname, validate_mac};
@@ -25,14 +26,34 @@ pub enum Source {
     QemuIso { iso: Option<String> },
     /// LXC from a `vztmpl` volume.
     LxcTemplate { volid: String },
+    /// Download an image from the OS catalog: QEMU via `import-from`, LXC as `ostemplate`.
+    Catalog { entry: Box<CatalogEntry> },
 }
 
 impl Source {
     pub fn kind(&self) -> GuestKind {
         match self {
             Source::LxcTemplate { .. } => GuestKind::Lxc,
+            Source::Catalog { entry } if entry.is_lxc() => GuestKind::Lxc,
             _ => GuestKind::Qemu,
         }
+    }
+}
+
+/// Keys a catalog entry's `config` may not override.
+const PROTECTED_KEYS: [&str; 6] = ["vmid", "ostemplate", "pool", "password", "cipassword", "sshkeys"];
+
+/// Applies a catalog entry's ostype and config overrides (the module's
+/// `applyLiveReinstallConfigOverrides`).
+pub fn apply_catalog_overrides(p: &mut Params, entry: &CatalogEntry) {
+    if !entry.ostype.is_empty() {
+        p.push("ostype", catalog::normalize_ostype(&entry.virt, &entry.ostype));
+    }
+    for (k, v) in &entry.config {
+        if PROTECTED_KEYS.contains(&k.as_str()) {
+            continue;
+        }
+        p.push(k, v);
     }
 }
 
@@ -158,6 +179,7 @@ impl Default for CreateSpec {
 pub struct Env {
     pub client: PveClient,
     pub server_id: String,
+    pub profile: ServerProfile,
     pub settings: Settings,
     pub ipam: Arc<Mutex<IpamDb>>,
 }
@@ -172,6 +194,8 @@ pub struct ResolvedIps {
     pub dns: Vec<String>,
     /// Addresses taken from IPAM by this operation (to roll back on failure).
     pub allocated: Vec<String>,
+    /// VLAN of the IPAM pool the address came from.
+    pub vlan: Option<u16>,
 }
 
 impl ResolvedIps {
@@ -216,9 +240,11 @@ fn resolve_mode(
                 v6,
                 preferred: preferred.clone(),
                 pool_id: pool_id.clone(),
+                iface: 0,
             };
             let a: Allocation = env.ipam.lock().allocate(&req)?;
             out.allocated.push(a.ip.clone());
+            out.vlan = out.vlan.or(a.vlan);
             out.dns.extend(a.dns.split([' ', ',']).filter(|s| !s.is_empty()).map(str::to_string));
             (Some(a.cidr), Some(a.gateway).filter(|g| !g.is_empty()))
         }
@@ -360,6 +386,11 @@ pub fn validate(spec: &CreateSpec) -> anyhow::Result<()> {
     {
         errs.push("choose a container template".into());
     }
+    if let Source::Catalog { entry } = &spec.source
+        && let Err(e) = entry.validate()
+    {
+        errs.push(format!("{e:#}"));
+    }
     if !errs.is_empty() {
         bail!("validation failed:\n  {}", errs.join("\n  "));
     }
@@ -419,7 +450,14 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
 
     // 2. Placement. Template clones default to the template's node so local
     //    template disks can be cloned; other nodes are handled by migrating after.
+    //    Catalog images restrict placement to nodes that can download them
+    //    (the module's resolveNodeLiveStorageCandidates).
     let content = if kind == GuestKind::Lxc { "rootdir" } else { "images" };
+    let catalog_candidates = match &spec.source {
+        Source::Catalog { entry } => Some(catalog_nodes(&env, &ctx, entry, spec.node.as_deref()).await?),
+        _ => None,
+    };
+    let allowed_nodes: Vec<String> = catalog_candidates.as_ref().map(|m| m.keys().cloned().collect()).unwrap_or_default();
     let (node, storage) = match (&spec.node, &spec.source) {
         (Some(n), _) => {
             let storage = match &spec.storage {
@@ -443,7 +481,7 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
                 disk_gb: spec.disk_gb,
                 content,
                 storage: spec.storage.clone(),
-                nodes: vec![],
+                nodes: allowed_nodes.clone(),
             };
             let p = placement::select(client, &req, env.settings.placement, &env.settings.resource_priority).await?;
             for n in &p.notes {
@@ -460,13 +498,35 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
     if !ips.allocated.is_empty() {
         ctx.info(format!("IPAM allocated {}", ips.allocated.join(", ")));
     }
+    if spec.net.vlan.is_none()
+        && let Some(v) = ips.vlan
+    {
+        ctx.info(format!("using VLAN {v} of the IPAM pool"));
+        spec.net.vlan = Some(v);
+    }
     let mac = spec.net.mac.clone().filter(|m| !m.is_empty()).unwrap_or_else(|| generate_mac(&env.settings.mac_prefix));
 
     let result = match &spec.source {
-        Source::LxcTemplate { volid } => create_lxc(&env, &ctx, &spec, vmid, &node, &storage, volid, &ips, &mac).await,
+        Source::LxcTemplate { volid } => create_lxc(&env, &ctx, &spec, vmid, &node, &storage, volid, &ips, &mac, None).await,
         Source::QemuIso { iso } => create_qemu_iso(&env, &ctx, &spec, vmid, &node, &storage, iso.as_deref(), &mac).await,
         Source::QemuTemplate { node: tnode, vmid: tid, full } => {
             create_qemu_clone(&env, &ctx, &spec, vmid, &node, &storage, tnode, *tid, *full, &ips, &mac).await
+        }
+        Source::Catalog { entry } => {
+            let cands = catalog_candidates.as_ref().and_then(|m| m.get(&node)).cloned().unwrap_or_default();
+            match catalog::download(client, &ctx, &node, entry, vmid, &cands, &env.settings).await {
+                Ok(art) => {
+                    let r = if entry.is_lxc() {
+                        create_lxc(&env, &ctx, &spec, vmid, &node, &storage, &art.volid, &ips, &mac, Some(entry)).await
+                    } else {
+                        create_qemu_catalog(&env, &ctx, &spec, vmid, &node, &storage, entry, &art.volid, &ips, &mac).await
+                    };
+                    // The downloaded image is never left behind, success or not.
+                    catalog::cleanup(client, &ctx, &art).await;
+                    r
+                }
+                Err(e) => Err(e.context("downloading the catalog image failed")),
+            }
         }
     };
 
@@ -508,6 +568,7 @@ async fn create_lxc(
     volid: &str,
     ips: &ResolvedIps,
     mac: &str,
+    catalog_entry: Option<&CatalogEntry>,
 ) -> anyhow::Result<()> {
     let mut p = Params::new()
         .set("vmid", vmid)
@@ -535,6 +596,9 @@ async fn create_lxc(
     let keys: Vec<&str> = spec.ssh_keys.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
     if !keys.is_empty() {
         p.push("ssh-public-keys", keys.join("\n"));
+    }
+    if let Some(e) = catalog_entry {
+        apply_catalog_overrides(&mut p, e);
     }
     ctx.info(format!("creating container {vmid} from {volid}"));
     let r = env.client.post(&format!("/nodes/{node}/lxc"), &p).await?;
@@ -592,6 +656,118 @@ async fn create_qemu_iso(
     ctx.info(format!("creating VM {vmid}"));
     let r = env.client.post(&format!("/nodes/{node}/qemu"), &p).await?;
     run_task(&env.client, ctx, "create VM", r).await
+}
+
+/// Nodes that may receive a catalog image, with their usable download storages.
+async fn catalog_nodes(
+    env: &Env,
+    ctx: &JobCtx,
+    entry: &CatalogEntry,
+    fixed: Option<&str>,
+) -> anyhow::Result<std::collections::BTreeMap<String, Vec<NodeStorage>>> {
+    let client = &env.client;
+    let size = catalog::estimate_size(entry, &env.settings).await;
+    ctx.info(format!("catalog image `{}`: needs ~{} of download space", entry.label, crate::util::fmt_bytes(size as f64 * 1.2)));
+    let nodes: Vec<String> = match fixed {
+        Some(n) => vec![n.to_string()],
+        None => client.get_list("/nodes").await?.iter().filter(|n| n.s("status") == "online").map(|n| n.s("node")).collect(),
+    };
+    let mut out = std::collections::BTreeMap::new();
+    let mut why = Vec::new();
+    for n in nodes {
+        if !entry.nodes.is_empty() && !entry.nodes.contains(&n) {
+            why.push(format!("{n}: not in the entry's node list"));
+            continue;
+        }
+        match catalog::node_candidates(client, &n, entry, &env.profile, size).await {
+            Ok(c) if !c.is_empty() => {
+                ctx.info(format!("{n}: download storage {}", c.iter().map(|s| s.storage.clone()).collect::<Vec<_>>().join(" -> ")));
+                out.insert(n, c);
+            }
+            Ok(_) => why.push(format!("{n}: {}", catalog::describe_missing(&env.profile, entry))),
+            Err(e) => why.push(format!("{n}: cannot read storage ({e:#})")),
+        }
+    }
+    if out.is_empty() {
+        bail!("no node can download `{}`:\n  {}", entry.label, why.join("\n  "));
+    }
+    Ok(out)
+}
+
+/// A VM whose boot disk is imported from a downloaded cloud image
+/// (the module's `CreateVmLiveQemu`).
+#[allow(clippy::too_many_arguments)]
+async fn create_qemu_catalog(
+    env: &Env,
+    ctx: &JobCtx,
+    spec: &CreateSpec,
+    vmid: u64,
+    node: &str,
+    storage: &str,
+    entry: &CatalogEntry,
+    image: &str,
+    ips: &ResolvedIps,
+    mac: &str,
+) -> anyhow::Result<()> {
+    let bus = if spec.disk_bus.is_empty() { "scsi" } else { spec.disk_bus.as_str() };
+    let disk_key = format!("{bus}0");
+    let mut disk = format!("{storage}:0,import-from={image}");
+    if bus == "scsi" || bus == "virtio" {
+        disk.push_str(",iothread=1,discard=on");
+    }
+    let mut p = Params::new()
+        .set("vmid", vmid)
+        .set("name", &spec.hostname)
+        .set("memory", spec.memory_mb)
+        .set("cores", spec.cores)
+        .set("sockets", spec.sockets.max(1))
+        .set("cpu", &spec.cpu_type)
+        .set("ostype", catalog::normalize_ostype("qemu", &entry.ostype))
+        .set("scsihw", "virtio-scsi-single")
+        .set(&disk_key, disk)
+        .set("ide2", format!("{storage}:cloudinit"))
+        // Cloud images expect a serial console.
+        .set("serial0", "socket")
+        .set("vga", "serial0")
+        .set("boot", format!("order={disk_key};net0"))
+        .set("net0", qemu_net_line(&spec.net, mac))
+        .flag("onboot", spec.onboot)
+        .opt("pool", spec.pool.as_deref())
+        .opt("tags", Some(tags(spec, &env.settings)))
+        .opt("description", Some(description(spec, &env.settings)));
+    if spec.agent {
+        p.push("agent", "1");
+    }
+    if let Some(l) = spec.cpulimit.filter(|l| *l > 0.0) {
+        p.push("cpulimit", format!("{l}"));
+    }
+    let ipc = ipconfig_line(ips);
+    if !ipc.is_empty() {
+        p.push("ipconfig0", ipc);
+    }
+    let user = if !spec.ciuser.is_empty() { spec.ciuser.clone() } else { entry.cloud_user.clone() };
+    if !user.is_empty() {
+        p.push("ciuser", user);
+    }
+    if !spec.password.is_empty() {
+        p.push("cipassword", &spec.password);
+    }
+    if let Some(k) = encode_sshkeys(&spec.ssh_keys) {
+        p.push("sshkeys", k);
+    }
+    if let Some(ns) = nameservers(spec, &env.settings, ips) {
+        p.push("nameserver", ns);
+    }
+    let sd = if spec.searchdomain.trim().is_empty() { env.settings.default_search_domain.trim() } else { spec.searchdomain.trim() };
+    if !sd.is_empty() {
+        p.push("searchdomain", sd);
+    }
+    apply_catalog_overrides(&mut p, entry);
+    ctx.info(format!("creating VM {vmid} with its disk imported from {image}"));
+    let r = env.client.post(&format!("/nodes/{node}/qemu"), &p).await?;
+    run_task(&env.client, ctx, "create VM (import disk)", r).await?;
+    let g = GuestRef { node: node.to_string(), kind: GuestKind::Qemu, vmid };
+    guest::grow_disk(&env.client, ctx, &g, &disk_key, spec.disk_gb).await
 }
 
 #[allow(clippy::too_many_arguments)]

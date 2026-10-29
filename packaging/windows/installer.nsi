@@ -1,13 +1,13 @@
 ; ProxmoxPanel Windows installer (NSIS 3).
 ;
-; Build:  makensis -DVERSION=0.1.0 -DEXE=path\to\proxmoxpanel.exe -DOUTFILE=ProxmoxPanel-Setup.exe packaging\windows\installer.nsi
+; Build:  makensis -DVERSION=0.2.0 -DEXE=path\to\proxmoxpanel.exe -DOUTFILE=ProxmoxPanel-Setup.exe packaging\windows\installer.nsi
 ; (packaging/build-installers.sh does this for you.)
 
 Unicode true
 SetCompressor /SOLID lzma
 
 !ifndef VERSION
-  !define VERSION "0.1.0"
+  !define VERSION "0.2.0"
 !endif
 !ifndef EXE
   !define EXE "..\..\target\release\proxmoxpanel.exe"

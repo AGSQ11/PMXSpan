@@ -5,6 +5,7 @@ mod backups;
 mod cloudinit;
 mod firewall;
 mod hardware;
+mod ips;
 mod manage;
 mod network;
 mod snapshots;
@@ -26,6 +27,7 @@ enum Tab {
     Summary,
     Hardware,
     Network,
+    Ips,
     CloudInit,
     Snapshots,
     Backups,
@@ -83,6 +85,7 @@ pub struct GuestView {
     summary: summary::SummaryTab,
     hardware: hardware::HardwareTab,
     network: network::NetworkTab,
+    ips: ips::IpsTab,
     cloudinit: cloudinit::CloudInitTab,
     snapshots: snapshots::SnapshotsTab,
     backups: backups::BackupsTab,
@@ -104,6 +107,7 @@ impl GuestView {
             summary: Default::default(),
             hardware: Default::default(),
             network: Default::default(),
+            ips: Default::default(),
             cloudinit: Default::default(),
             snapshots: Default::default(),
             backups: Default::default(),
@@ -135,7 +139,8 @@ impl GuestView {
         self.header(ui, sh, &g, &res);
         ui.separator();
         ui.horizontal_wrapped(|ui| {
-            let mut tabs = vec![(Tab::Summary, "Summary"), (Tab::Hardware, "Hardware"), (Tab::Network, "Network")];
+            let mut tabs =
+                vec![(Tab::Summary, "Summary"), (Tab::Hardware, "Hardware"), (Tab::Network, "Network"), (Tab::Ips, "IP addresses")];
             if self.kind == GuestKind::Qemu {
                 tabs.push((Tab::CloudInit, "Cloud-Init"));
             }
@@ -159,6 +164,7 @@ impl GuestView {
             Tab::Summary => self.summary.ui(ui, &gc, actions),
             Tab::Hardware => self.hardware.ui(ui, &gc, actions),
             Tab::Network => self.network.ui(ui, &gc, actions),
+            Tab::Ips => self.ips.ui(ui, &gc, actions),
             Tab::CloudInit => self.cloudinit.ui(ui, &gc, actions),
             Tab::Snapshots => self.snapshots.ui(ui, &gc, actions),
             Tab::Backups => self.backups.ui(ui, &gc, actions),

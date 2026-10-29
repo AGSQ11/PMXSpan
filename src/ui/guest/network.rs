@@ -124,11 +124,10 @@ impl NetworkTab {
             });
         }
         if let Some(key) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_remove) {
-            let (c, g) = (gc.sh.client.clone(), gc.g.clone());
-            gc.sh.spawn(gc.title(&format!("Remove {key}")), move |ctx| async move {
-                guest::set_config(&c, &ctx, &g, Params::new().set("delete", &key)).await?;
-                Ok(format!("{key} removed"))
-            });
+            // Removing an interface also releases its IPAM addresses and IP filter set.
+            let (env, g) = (gc.sh.env(), gc.g.clone());
+            let n: u32 = key.trim_start_matches("net").parse().unwrap_or(0);
+            gc.sh.spawn(gc.title(&format!("Remove {key}")), move |ctx| crate::ops::ipassign::remove_interface(env, ctx, g, n));
         }
         let kind = gc.g.kind;
         let mut nics: Vec<(String, String)> = cfg.iter().filter(|(k, _)| is_net_key(k)).map(|(k, v)| (k.clone(), value_str(v))).collect();
@@ -144,8 +143,14 @@ impl NetworkTab {
                         self.editing = Some(NicForm::parse(kind, k, v));
                     }
                     if ui.small_button(RichText::new("Remove").color(theme::ERR)).clicked() {
-                        self.confirm_remove =
-                            Some(Confirm::new("Remove interface", format!("Remove {k} from this guest?"), k.clone()).danger());
+                        self.confirm_remove = Some(
+                            Confirm::new(
+                                "Remove interface",
+                                format!("Remove {k} from this guest? Its IPAM addresses are released."),
+                                k.clone(),
+                            )
+                            .danger(),
+                        );
                     }
                 });
                 ui.end_row();
@@ -262,6 +267,7 @@ impl NetworkTab {
                                     v6,
                                     preferred: Some(self.ipam_preferred.clone()).filter(|s| !s.trim().is_empty()),
                                     pool_id: self.ipam_pool.clone(),
+                                    iface: f.key.trim_start_matches("net").parse().unwrap_or(0),
                                 };
                                 match gc.sh.ipam.lock().allocate(&req) {
                                     Ok(a) => {

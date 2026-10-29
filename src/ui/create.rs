@@ -4,6 +4,7 @@ use super::guest::value_str;
 use super::{Actions, Shared, theme, widgets};
 use crate::api::Params;
 use crate::api::types::{GuestKind, Resource};
+use crate::ops::catalog::{self, CatalogEntry};
 use crate::ops::create::{self, CreateSpec, IpMode, NetSpec, Source};
 use crate::rt::Fetch;
 use crate::util::ValueExt;
@@ -26,6 +27,7 @@ enum QemuMode {
     #[default]
     Template,
     Iso,
+    Catalog,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Default)]
@@ -53,6 +55,8 @@ pub struct CreateView {
     template: Option<(String, u64)>,
     iso: Option<String>,
     vztmpl: String,
+    lxc_catalog: bool,
+    catalog_id: Option<String>,
     node: Option<String>,
     storage: Option<String>,
     auto_vmid: bool,
@@ -113,6 +117,8 @@ impl Default for CreateView {
             template: None,
             iso: None,
             vztmpl: String::new(),
+            lxc_catalog: false,
+            catalog_id: None,
             node: None,
             storage: None,
             auto_vmid: true,
@@ -285,6 +291,7 @@ impl CreateView {
                     ui.horizontal(|ui| {
                         ui.radio_value(&mut self.qmode, QemuMode::Template, "Clone a template (cloud-init ready)");
                         ui.radio_value(&mut self.qmode, QemuMode::Iso, "Blank VM + installer ISO");
+                        ui.radio_value(&mut self.qmode, QemuMode::Catalog, "Image from the OS catalog");
                     });
                     match self.qmode {
                         QemuMode::Template => {
@@ -305,6 +312,19 @@ impl CreateView {
                                         self.template = Some((t.node.clone(), t.vmid));
                                     }
                                 }
+                            });
+                        }
+                        QemuMode::Catalog => {
+                            self.catalog_picker(ui, sh, actions, false);
+                            ui.horizontal(|ui| {
+                                ui.label("Disk bus");
+                                egui::ComboBox::from_id_salt("cr-bus").selected_text(self.disk_bus.clone()).show_ui(ui, |ui| {
+                                    for b in ["scsi", "virtio", "sata"] {
+                                        ui.selectable_value(&mut self.disk_bus, b.to_string(), b);
+                                    }
+                                });
+                                ui.label("CPU type");
+                                ui.add(egui::TextEdit::singleline(&mut self.cpu_type).desired_width(130.0));
                             });
                         }
                         QemuMode::Iso => {
@@ -335,6 +355,13 @@ impl CreateView {
                 }
                 GuestKind::Lxc => {
                     ui.horizontal(|ui| {
+                        ui.radio_value(&mut self.lxc_catalog, false, "Template on storage");
+                        ui.radio_value(&mut self.lxc_catalog, true, "Template from the OS catalog");
+                    });
+                    if self.lxc_catalog {
+                        self.catalog_picker(ui, sh, actions, true);
+                    } else {
+                    ui.horizontal(|ui| {
                         widgets::combo(ui, "cr-vztmpl", &mut self.vztmpl, &vztmpls, 420.0);
                         if self.media.is_loading() {
                             ui.spinner();
@@ -347,6 +374,7 @@ impl CreateView {
                                 actions.nav(super::Nav::Storage);
                             }
                         });
+                    }
                     }
                 }
             }
@@ -422,6 +450,8 @@ impl CreateView {
                     ui.add(egui::DragValue::new(&mut self.disk).range(1..=65536).suffix(" GiB"));
                     if self.kind == GuestKind::Qemu && self.qmode == QemuMode::Template {
                         widgets::muted(ui, "grown to this size after cloning (never shrunk)");
+                    } else if self.kind == GuestKind::Qemu && self.qmode == QemuMode::Catalog {
+                        widgets::muted(ui, "grown to this size after importing the image (never shrunk)");
                     }
                 });
                 ui.end_row();
@@ -460,7 +490,7 @@ impl CreateView {
                 ui.label("MAC");
                 ui.add(egui::TextEdit::singleline(&mut self.mac).hint_text(format!("auto ({}:…)", sh.settings.mac_prefix)).desired_width(180.0));
                 ui.end_row();
-                let addressing = self.kind == GuestKind::Lxc || self.qmode == QemuMode::Template;
+                let addressing = self.kind == GuestKind::Lxc || self.qmode != QemuMode::Iso;
                 if addressing {
                     let pools4: Vec<(String, String)> = sh.ipam.lock().pools.iter().filter(|p| !p.is_v6()).map(|p| (p.id.clone(), format!("{} ({})", p.name, p.cidr))).collect();
                     let pools6: Vec<(String, String)> = sh.ipam.lock().pools.iter().filter(|p| p.is_v6()).map(|p| (p.id.clone(), format!("{} ({})", p.name, p.cidr))).collect();
@@ -523,9 +553,13 @@ impl CreateView {
 
             widgets::section(ui, "5. Access");
             egui::Grid::new("cr-access").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                if self.kind == GuestKind::Qemu && self.qmode == QemuMode::Template {
+                if self.kind == GuestKind::Qemu && self.qmode != QemuMode::Iso {
+                    let hint = match (self.qmode, self.catalog_entry(sh, false)) {
+                        (QemuMode::Catalog, Some(e)) if !e.cloud_user.is_empty() => format!("{} (catalog default)", e.cloud_user),
+                        _ => "image default".to_string(),
+                    };
                     ui.label("Cloud-init user");
-                    ui.add(egui::TextEdit::singleline(&mut self.ciuser).hint_text("image default"));
+                    ui.add(egui::TextEdit::singleline(&mut self.ciuser).hint_text(hint));
                     ui.end_row();
                 }
                 if !(self.kind == GuestKind::Qemu && self.qmode == QemuMode::Iso) {
@@ -563,12 +597,13 @@ impl CreateView {
             });
 
             ui.add_space(10.0);
-            let spec = self.spec();
+            let spec = self.spec(sh);
             let valid = create::validate(&spec);
             let source_ok = match &spec.source {
                 Source::QemuTemplate { .. } => self.template.is_some(),
                 Source::QemuIso { .. } => true,
                 Source::LxcTemplate { volid } => !volid.is_empty(),
+                Source::Catalog { entry } => !entry.id.is_empty(),
             };
             if let Err(e) = &valid
                 && !self.hostname.is_empty() {
@@ -592,11 +627,63 @@ impl CreateView {
         });
     }
 
-    fn spec(&self) -> CreateSpec {
+    fn catalog_entry(&self, sh: &Shared, lxc: bool) -> Option<CatalogEntry> {
+        let id = self.catalog_id.as_ref()?;
+        sh.catalog.lock().for_virt(lxc).into_iter().find(|e| &e.id == id)
+    }
+
+    fn catalog_picker(&mut self, ui: &mut egui::Ui, sh: &Shared, actions: &mut Actions, lxc: bool) {
+        let entries = sh.catalog.lock().for_virt(lxc);
+        if self.catalog_id.as_ref().is_some_and(|id| !entries.iter().any(|e| &e.id == id)) {
+            self.catalog_id = None;
+        }
+        if entries.is_empty() {
+            ui.horizontal(|ui| {
+                widgets::warn_box(
+                    ui,
+                    if lxc { "The catalog has no container (lxc) entries." } else { "The catalog has no VM (qemu) entries." },
+                );
+                if ui.link("Edit the OS image catalog →").clicked() {
+                    actions.nav(super::Nav::Catalog);
+                }
+            });
+            return;
+        }
+        let label = self
+            .catalog_id
+            .as_ref()
+            .and_then(|id| entries.iter().find(|e| &e.id == id))
+            .map(|e| e.label.clone())
+            .unwrap_or_else(|| "(choose image)".into());
+        egui::ComboBox::from_id_salt("cr-catalog").selected_text(label).width(360.0).show_ui(ui, |ui| {
+            for e in &entries {
+                ui.selectable_value(&mut self.catalog_id, Some(e.id.clone()), &e.label).on_hover_text(&e.url);
+            }
+        });
+        if let Some(e) = self.catalog_entry(sh, lxc) {
+            widgets::muted(ui, format!("{} · {}", e.url, if e.nodes.is_empty() { "any node".to_string() } else { e.nodes.join(", ") }));
+        }
+        if catalog::configured_storages(&sh.profile, lxc).is_empty() {
+            widgets::warn_box(
+                ui,
+                &format!(
+                    "No catalog download storage is set for {} images on this server. Set one in Servers → Edit → Catalog download storage.",
+                    if lxc { "container" } else { "VM" }
+                ),
+            );
+        } else {
+            widgets::muted(ui, "The image is downloaded to the node first and removed again once the guest is created.");
+        }
+    }
+
+    fn spec(&self, sh: &Shared) -> CreateSpec {
+        let catalog_source = |lxc: bool| Source::Catalog { entry: Box::new(self.catalog_entry(sh, lxc).unwrap_or_default()) };
         let source = match (self.kind, self.qmode) {
+            (GuestKind::Lxc, _) if self.lxc_catalog => catalog_source(true),
+            (GuestKind::Qemu, QemuMode::Catalog) => catalog_source(false),
             (GuestKind::Lxc, _) => Source::LxcTemplate { volid: self.vztmpl.clone() },
             (GuestKind::Qemu, QemuMode::Iso) => Source::QemuIso { iso: self.iso.clone() },
-            (GuestKind::Qemu, QemuMode::Template) => {
+            (GuestKind::Qemu, _) => {
                 let (node, vmid) = self.template.clone().unwrap_or_default();
                 Source::QemuTemplate { node, vmid, full: true }
             }

@@ -4,13 +4,18 @@
 //! The guest keeps its VMID, name, resources, NICs (including MAC addresses,
 //! so DHCP reservations and IPAM bindings stay valid), cloud-init network
 //! config and pool membership. Its disks are replaced by a fresh copy of the
-//! chosen template. This is destructive and the UI makes the operator type
-//! the VMID to confirm.
+//! chosen template or OS catalog image. This is destructive and the UI makes
+//! the operator type the VMID to confirm.
+//!
+//! Catalog rebuilds follow the module's `RebuildVmLive*`: the image is
+//! downloaded *before* anything is deleted, so an unreachable mirror or a full
+//! storage leaves the guest untouched; the download is always cleaned up.
 
-use super::create::{Env, encode_sshkeys};
+use super::catalog::{self, Artifact, CatalogEntry};
+use super::create::{Env, apply_catalog_overrides, encode_sshkeys};
 use super::guest::{self, PowerAction, run_task};
 use crate::api::Params;
-use crate::api::types::{GuestKind, GuestRef, is_net_key};
+use crate::api::types::{GuestKind, GuestRef, is_lxc_disk_key, is_net_key, is_qemu_disk_key};
 use crate::jobs::JobCtx;
 use crate::util::{PropString, ValueExt};
 use anyhow::{Context, bail};
@@ -18,8 +23,17 @@ use serde_json::Value;
 
 #[derive(Clone, Debug)]
 pub enum RebuildSource {
-    QemuTemplate { node: String, vmid: u64 },
-    LxcTemplate { volid: String },
+    QemuTemplate {
+        node: String,
+        vmid: u64,
+    },
+    LxcTemplate {
+        volid: String,
+    },
+    /// An OS catalog image (VM cloud image or container template).
+    Catalog {
+        entry: Box<CatalogEntry>,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -78,7 +92,6 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
     let g = spec.guest.clone();
     let cfg = guest::config(client, &g).await.context("reading current config")?;
     let st = guest::status(client, &g).await?;
-    let was_running = st.s("status") == "running";
     if cfg.get("protection").map(|v| v.as_str() == Some("1") || v.as_u64() == Some(1)).unwrap_or(false) {
         bail!("guest has protection enabled; disable it before rebuilding");
     }
@@ -107,20 +120,191 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
         pool.as_deref().unwrap_or("-")
     ));
 
+    // Catalog: download first. Nothing has been touched yet if this fails.
+    let artifact = match &spec.source {
+        RebuildSource::Catalog { entry } => {
+            if entry.is_lxc() != (g.kind == GuestKind::Lxc) {
+                bail!("catalog entry `{}` is for {}, not this {}", entry.label, entry.virt, g.kind.label());
+            }
+            if !entry.nodes.is_empty() && !entry.nodes.contains(&g.node) {
+                bail!(
+                    "catalog entry `{}` is restricted to nodes {}; the guest is on {} (nothing was changed)",
+                    entry.label,
+                    entry.nodes.join(", "),
+                    g.node
+                );
+            }
+            let size = catalog::estimate_size(entry, &env.settings).await;
+            let cands = catalog::node_candidates(client, &g.node, entry, &env.profile, size).await?;
+            if cands.is_empty() {
+                bail!("{} on {} - the guest was NOT modified", catalog::describe_missing(&env.profile, entry), g.node);
+            }
+            let a = catalog::download(client, &ctx, &g.node, entry, g.vmid, &cands, &env.settings)
+                .await
+                .context("downloading the catalog image failed - the guest was NOT modified")?;
+            Some(a)
+        }
+        _ => None,
+    };
+    // Destroying a guest also deletes its firewall config (rules, options,
+    // aliases, ipsets), so it is carried over explicitly.
+    let firewall = match FirewallSnapshot::take(client, &g).await {
+        Ok(f) => Some(f),
+        Err(e) => {
+            ctx.warn(format!("could not read the firewall config, it will not be carried over: {e:#}"));
+            None
+        }
+    };
+    let result =
+        destroy_and_recreate(&env, &ctx, &spec, &g, &cfg, &st, &boot, &boot_storage, boot_size, pool.as_deref(), artifact.as_ref()).await;
+    if let Some(a) = &artifact {
+        catalog::cleanup(client, &ctx, a).await;
+    }
+    let (g, was_running) = result?;
+    if let Some(f) = &firewall {
+        f.restore(client, &ctx, &g).await;
+    }
+    reapply_ipam(&env, &ctx, &g).await;
+
+    if spec.start.unwrap_or(was_running) {
+        ctx.progress(0.9);
+        guest::power(client, &ctx, &g, PowerAction::Start).await?;
+    }
+    Ok(format!("{} {} rebuilt on {}", g.kind.label(), g.vmid, g.node))
+}
+
+/// A guest's firewall config, as read from the API.
+struct FirewallSnapshot {
+    options: serde_json::Map<String, Value>,
+    rules: Vec<Value>,
+    aliases: Vec<Value>,
+    ipsets: Vec<(Value, Vec<Value>)>,
+}
+
+impl FirewallSnapshot {
+    async fn take(client: &crate::api::PveClient, g: &GuestRef) -> anyhow::Result<Self> {
+        let base = format!("{}/firewall", g.path());
+        let options = client.get(&format!("{base}/options")).await?.as_object().cloned().unwrap_or_default();
+        let mut rules = client.get_list(&format!("{base}/rules")).await?;
+        rules.sort_by_key(|r| r.u("pos"));
+        let aliases = client.get_list(&format!("{base}/aliases")).await?;
+        let mut ipsets = Vec::new();
+        for set in client.get_list(&format!("{base}/ipset")).await? {
+            let entries = client.get_list(&format!("{base}/ipset/{}", set.s("name"))).await?;
+            ipsets.push((set, entries));
+        }
+        Ok(Self { options, rules, aliases, ipsets })
+    }
+
+    fn is_empty(&self) -> bool {
+        self.rules.is_empty() && self.aliases.is_empty() && self.ipsets.is_empty() && self.options.keys().all(|k| k == "digest")
+    }
+
+    /// Writes everything back. Failures are warnings: the guest itself is fine.
+    async fn restore(&self, client: &crate::api::PveClient, ctx: &JobCtx, g: &GuestRef) {
+        if self.is_empty() {
+            return;
+        }
+        let base = format!("{}/firewall", g.path());
+        let params = |v: &Value, skip: &[&str]| {
+            let mut p = Params::new();
+            for (k, v) in v.as_object().into_iter().flatten() {
+                if !skip.contains(&k.as_str()) && !v.is_null() {
+                    p.push(k, value_str(v));
+                }
+            }
+            p
+        };
+        let mut failed = Vec::new();
+        for a in &self.aliases {
+            if let Err(e) = client.post(&format!("{base}/aliases"), &params(a, &["digest", "ipversion"])).await {
+                failed.push(format!("alias {}: {e:#}", a.s("name")));
+            }
+        }
+        for (set, entries) in &self.ipsets {
+            let name = set.s("name");
+            if let Err(e) = client.post(&format!("{base}/ipset"), &params(set, &["digest"])).await {
+                failed.push(format!("ipset {name}: {e:#}"));
+                continue;
+            }
+            for e in entries {
+                if let Err(err) = client.post(&format!("{base}/ipset/{name}"), &params(e, &["digest"])).await {
+                    failed.push(format!("{name} {}: {err:#}", e.s("cidr")));
+                }
+            }
+        }
+        // New rules are inserted at the top, so add them bottom-up.
+        for r in self.rules.iter().rev() {
+            if let Err(e) = client.post(&format!("{base}/rules"), &params(r, &["pos", "digest", "ipversion"])).await {
+                failed.push(format!("rule {}: {e:#}", r.u("pos")));
+            }
+        }
+        let opts = params(&Value::Object(self.options.clone()), &["digest"]);
+        if !opts.is_empty()
+            && let Err(e) = client.put(&format!("{base}/options"), &opts).await
+        {
+            failed.push(format!("options: {e:#}"));
+        }
+        if failed.is_empty() {
+            ctx.info(format!(
+                "firewall restored: {} rule(s), {} alias(es), {} ipset(s)",
+                self.rules.len(),
+                self.aliases.len(),
+                self.ipsets.len()
+            ));
+        } else {
+            ctx.warn(format!("firewall only partly restored: {}", failed.join("; ")));
+        }
+    }
+}
+
+/// Re-applies the guest's IPAM addresses after a rebuild (they survive it).
+async fn reapply_ipam(env: &Env, ctx: &JobCtx, g: &GuestRef) {
+    if env.ipam.lock().guest_ips(&env.server_id, g.vmid).is_empty() {
+        return;
+    }
+    let opts = super::ipassign::ApplyOpts::default();
+    if let Err(e) = super::ipassign::apply(env, ctx, g, opts, &Default::default()).await {
+        ctx.warn(format!("could not re-apply IPAM addresses: {e:#} (use the IP addresses tab)"));
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn destroy_and_recreate(
+    env: &Env,
+    ctx: &JobCtx,
+    spec: &RebuildSpec,
+    g: &GuestRef,
+    cfg: &serde_json::Map<String, Value>,
+    st: &Value,
+    boot: &str,
+    boot_storage: &str,
+    boot_size: u64,
+    pool: Option<&str>,
+    artifact: Option<&Artifact>,
+) -> anyhow::Result<(GuestRef, bool)> {
+    let client = &env.client;
+    let was_running = st.s("status") == "running";
     if was_running || st.s("status") == "paused" {
-        guest::power(client, &ctx, &g, PowerAction::Stop).await?;
+        guest::power(client, ctx, g, PowerAction::Stop).await?;
     }
     ctx.progress(0.15);
     let r = client.delete(&g.path(), &Params::new().set("purge", 0).set("destroy-unreferenced-disks", 1)).await?;
-    run_task(client, &ctx, &format!("remove old {} {}", g.kind.label(), g.vmid), r).await?;
+    run_task(client, ctx, &format!("remove old {} {}", g.kind.label(), g.vmid), r).await?;
     ctx.progress(0.35);
 
-    let rebuilt: anyhow::Result<GuestRef> = match (&spec.source, g.kind) {
-        (RebuildSource::QemuTemplate { node: tnode, vmid: tid }, GuestKind::Qemu) => {
-            rebuild_qemu(&env, &ctx, &g, &cfg, tnode, *tid, &boot_storage, boot_size, pool.as_deref(), &spec).await
+    let rebuilt: anyhow::Result<GuestRef> = match (&spec.source, g.kind, artifact) {
+        (RebuildSource::QemuTemplate { node: tnode, vmid: tid }, GuestKind::Qemu, _) => {
+            rebuild_qemu(env, ctx, g, cfg, tnode, *tid, boot_storage, boot_size, pool, spec).await
         }
-        (RebuildSource::LxcTemplate { volid }, GuestKind::Lxc) => {
-            rebuild_lxc(&env, &ctx, &g, &cfg, volid, &boot_storage, boot_size, pool.as_deref(), &spec).await
+        (RebuildSource::LxcTemplate { volid }, GuestKind::Lxc, _) => {
+            rebuild_lxc(env, ctx, g, cfg, volid, boot_storage, boot_size, pool, spec, None).await
+        }
+        (RebuildSource::Catalog { entry }, GuestKind::Lxc, Some(a)) => {
+            rebuild_lxc(env, ctx, g, cfg, &a.volid, boot_storage, boot_size, pool, spec, Some(entry)).await
+        }
+        (RebuildSource::Catalog { entry }, GuestKind::Qemu, Some(a)) => {
+            rebuild_qemu_catalog(env, ctx, g, cfg, boot, boot_storage, boot_size, pool, spec, entry, &a.volid).await
         }
         _ => bail!("rebuild source does not match the guest type"),
     };
@@ -131,12 +315,113 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
             g.vmid
         )
     })?;
+    Ok((g, was_running))
+}
 
-    if spec.start.unwrap_or(was_running) {
-        ctx.progress(0.9);
-        guest::power(client, &ctx, &g, PowerAction::Start).await?;
+/// Options of a disk line without its volume and size (`iothread=1,discard=on,...`).
+fn disk_options(line: &str) -> PropString {
+    let mut p = PropString::parse(line);
+    p.remove("");
+    p.remove("size");
+    p.remove("import-from");
+    p
+}
+
+fn storage_of(line: &str) -> Option<String> {
+    PropString::parse(line).positional().and_then(|v| v.split(':').next()).map(str::to_string).filter(|s| !s.is_empty() && s != "none")
+}
+
+fn with_volume(volume: String, opts: PropString) -> String {
+    let mut p = PropString { parts: vec![(String::new(), volume)] };
+    p.parts.extend(opts.parts);
+    p.to_string()
+}
+
+/// QEMU reinstall from a catalog image (the module's `RebuildVmLiveQemu`):
+/// the boot disk is re-created with `import-from`, other disks are re-created
+/// empty with the same size, NICs/cloud-init network config are kept.
+#[allow(clippy::too_many_arguments)]
+async fn rebuild_qemu_catalog(
+    env: &Env,
+    ctx: &JobCtx,
+    g: &GuestRef,
+    old: &serde_json::Map<String, Value>,
+    boot: &str,
+    boot_storage: &str,
+    boot_size: u64,
+    pool: Option<&str>,
+    spec: &RebuildSpec,
+    entry: &CatalogEntry,
+    image: &str,
+) -> anyhow::Result<GuestRef> {
+    let client = &env.client;
+    let mut p = Params::new().set("vmid", g.vmid).opt("pool", pool);
+    for k in QEMU_KEEP.iter().chain(["scsihw", "bios", "machine", "boot", "vga", "serial0", "hookscript"].iter()) {
+        if let Some(v) = old.get(*k) {
+            p.push(k, value_str(v));
+        }
     }
-    Ok(format!("{} {} rebuilt on {}", g.kind.label(), g.vmid, g.node))
+    let mut ci_slot = None;
+    for (k, v) in old {
+        let line = value_str(v);
+        if is_net_key(k) || k.starts_with("ipconfig") {
+            p.push(k, line);
+        } else if is_qemu_disk_key(k) {
+            if line.contains("cloudinit") {
+                ci_slot = Some(k.clone());
+            } else if line.contains("media=cdrom") {
+                p.push(k, "none,media=cdrom");
+            } else if k == boot {
+                p.push(
+                    k,
+                    with_volume(format!("{boot_storage}:0"), disk_options(&line)).replacen(
+                        &format!("{boot_storage}:0"),
+                        &format!("{boot_storage}:0,import-from={image}"),
+                        1,
+                    ),
+                );
+            } else {
+                let gb =
+                    PropString::parse(&line).get("size").and_then(crate::util::parse_size).unwrap_or(0).div_ceil(1024 * 1024 * 1024).max(1);
+                let st = storage_of(&line).unwrap_or_else(|| boot_storage.to_string());
+                ctx.info(format!("{k} is re-created empty ({gb} GiB on {st})"));
+                p.push(k, with_volume(format!("{st}:{gb}"), disk_options(&line)));
+            }
+        } else if k == "efidisk0" || k == "tpmstate0" {
+            let st = storage_of(&line).unwrap_or_else(|| boot_storage.to_string());
+            p.push(k, with_volume(format!("{st}:1"), disk_options(&line)));
+        }
+    }
+    let ci_slot = ci_slot.unwrap_or_else(|| {
+        let taken: serde_json::Map<String, Value> = p.0.iter().map(|(k, v)| (k.clone(), Value::String(v.clone()))).collect();
+        if !taken.contains_key("ide2") { "ide2".into() } else { guest::free_disk_slot(&taken, "ide").unwrap_or("sata5".into()) }
+    });
+    p.push(&ci_slot, format!("{boot_storage}:cloudinit"));
+    if p.get("serial0").is_none() {
+        p.push("serial0", "socket");
+        p.push("vga", "serial0");
+    }
+    if p.get("boot").is_none() {
+        p.push("boot", format!("order={boot};net0"));
+    }
+    if !entry.cloud_user.is_empty() {
+        p.push("ciuser", &entry.cloud_user);
+    }
+    if !spec.password.is_empty() {
+        p.push("cipassword", &spec.password);
+    }
+    if let Some(k) = encode_sshkeys(&spec.ssh_keys) {
+        p.push("sshkeys", k);
+    }
+    apply_catalog_overrides(&mut p, entry);
+    ctx.info(format!("recreating VM {} with {boot} imported from {image}", g.vmid));
+    let r = client.post(&format!("/nodes/{}/qemu", g.node), &p).await?;
+    run_task(client, ctx, "recreate VM (import disk)", r).await?;
+    let gb = boot_size.div_ceil(1024 * 1024 * 1024);
+    if gb > 0 {
+        guest::grow_disk(client, ctx, g, boot, gb).await?;
+    }
+    Ok(g.clone())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -221,6 +506,7 @@ async fn rebuild_lxc(
     boot_size: u64,
     pool: Option<&str>,
     spec: &RebuildSpec,
+    entry: Option<&CatalogEntry>,
 ) -> anyhow::Result<GuestRef> {
     if spec.password.is_empty() && spec.ssh_keys.trim().is_empty() {
         bail!("a root password or SSH key is required to rebuild a container");
@@ -240,13 +526,27 @@ async fn rebuild_lxc(
         }
     }
     for (k, v) in old {
+        let line = value_str(v);
         if is_net_key(k) {
-            p.push(k, value_str(v));
+            p.push(k, line);
+        } else if is_lxc_disk_key(k) && k != "rootfs" {
+            // Mount points are re-created empty with the same size, path and options.
+            let gb = PropString::parse(&line).get("size").and_then(crate::util::parse_size).unwrap_or(0).div_ceil(1024 * 1024 * 1024);
+            match storage_of(&line) {
+                Some(st) if gb > 0 => {
+                    ctx.info(format!("{k} is re-created empty ({gb} GiB on {st})"));
+                    p.push(k, with_volume(format!("{st}:{gb}"), disk_options(&line)));
+                }
+                _ => ctx.warn(format!("{k} ({line}) is a bind mount or has no size; it is not re-created")),
+            }
         }
     }
     let keys: Vec<&str> = spec.ssh_keys.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).collect();
     if !keys.is_empty() {
         p.push("ssh-public-keys", keys.join("\n"));
+    }
+    if let Some(e) = entry {
+        apply_catalog_overrides(&mut p, e);
     }
     let r = env.client.post(&format!("/nodes/{}/lxc", g.node), &p).await?;
     run_task(&env.client, ctx, &format!("recreate container from {volid}"), r).await?;

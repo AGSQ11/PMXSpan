@@ -2,9 +2,11 @@
 //! provisioning logic that used to live in the HostBill module's feature traits.
 
 pub mod bandwidth;
+pub mod catalog;
 pub mod create;
 pub mod diagnostics;
 pub mod guest;
+pub mod ipassign;
 pub mod placement;
 pub mod rebuild;
 pub mod tenant;

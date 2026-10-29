@@ -48,6 +48,9 @@ impl AppPaths {
     pub fn ipam_file(&self) -> PathBuf {
         self.data_dir.join("ipam.json")
     }
+    pub fn catalog_file(&self) -> PathBuf {
+        self.config_dir.join("catalog.json")
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -89,6 +92,13 @@ pub struct ServerProfile {
     pub totp: bool,
     pub request_timeout_secs: u64,
     pub notes: String,
+    /// OS image catalog download storages (content `import`), main then fallback.
+    /// Empty = any active storage with `import` content.
+    pub catalog_qemu_storage: String,
+    pub catalog_qemu_storage_fallback: String,
+    /// Container template download storages (content `vztmpl`), main then fallback.
+    pub catalog_lxc_storage: String,
+    pub catalog_lxc_storage_fallback: String,
 }
 
 impl Default for ServerProfile {
@@ -107,6 +117,10 @@ impl Default for ServerProfile {
             totp: false,
             request_timeout_secs: 30,
             notes: String::new(),
+            catalog_qemu_storage: String::new(),
+            catalog_qemu_storage_fallback: String::new(),
+            catalog_lxc_storage: String::new(),
+            catalog_lxc_storage_fallback: String::new(),
         }
     }
 }
@@ -187,6 +201,12 @@ pub struct Settings {
     /// Fill new guests' description with a managed-by marker (like the module's guest markers).
     pub tag_managed_guests: bool,
     pub managed_tag: String,
+    /// Abort a catalog download when its task log shows no progress for this long.
+    pub download_stall_secs: u64,
+    /// Hard limit for one catalog download.
+    pub download_max_wait_secs: u64,
+    /// Free-space floor for catalog downloads (0 = 3 GiB VM images / 1 GiB templates).
+    pub download_min_bytes: u64,
 }
 
 impl Default for Settings {
@@ -206,6 +226,9 @@ impl Default for Settings {
             task_timeout_secs: 3600,
             tag_managed_guests: true,
             managed_tag: "proxmoxpanel".into(),
+            download_stall_secs: 180,
+            download_max_wait_secs: 1800,
+            download_min_bytes: 0,
         }
     }
 }

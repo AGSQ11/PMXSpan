@@ -38,9 +38,13 @@ impl IpamView {
         }
         if let Some(ip) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_release) {
             let mut d = db.lock();
-            d.assignments.retain(|a| a.ip != ip);
-            if let Err(e) = d.save() {
+            // Guest addresses go through release_ip so a released main address is replaced;
+            // reservations are simply dropped.
+            d.assignments.retain(|a| a.ip != ip || !a.reserved);
+            if let Err(e) = d.release_ip(&ip) {
                 actions.toast_err(format!("{e:#}"));
+            } else {
+                actions.toast("Released in IPAM only - re-apply on the guest's IP addresses tab to update its config");
             }
         }
         ui.add_space(6.0);
@@ -132,8 +136,8 @@ impl IpamView {
                     .collect();
                 drop(d);
                 egui::ScrollArea::vertical().id_salt("ipam-rows").show(ui, |ui| {
-                    egui::Grid::new("ipam-assign").striped(true).num_columns(6).spacing([14.0, 4.0]).show(ui, |ui| {
-                        for h in ["IP", "Server", "VMID", "Hostname / note", "Since", ""] {
+                    egui::Grid::new("ipam-assign").striped(true).num_columns(7).spacing([14.0, 4.0]).show(ui, |ui| {
+                        for h in ["IP", "Server", "VMID", "Interface", "Hostname / note", "Since", ""] {
                             ui.label(RichText::new(h).strong());
                         }
                         ui.end_row();
@@ -155,6 +159,11 @@ impl IpamView {
                                 None => {
                                     ui.label(RichText::new("reserved").color(theme::WARN));
                                 }
+                            }
+                            if a.vmid.is_some() {
+                                ui.label(format!("net{}{}", a.iface(), if a.main { " (main)" } else { "" }));
+                            } else {
+                                ui.label("");
                             }
                             ui.label(if a.hostname.is_empty() { a.note.clone() } else { a.hostname.clone() });
                             ui.label(crate::util::fmt_epoch(a.assigned_at));
