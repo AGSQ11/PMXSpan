@@ -1,8 +1,6 @@
 //! Local IP address management.
 //!
-//! The HostBill module delegated IP allocation to HostBill's IPAM plugin. As a
-//! standalone app we keep a small local database of pools and assignments,
-//! with the same guarantees the module was hardened to provide:
+//! A small local database of pools and assignments, with these guarantees:
 //! - an explicitly requested ("preferred") IP is honoured exactly or the
 //!   operation fails; there is no silent fallback to a random address;
 //! - allocation failures say *why* (no pools, no matching pool, exhausted).

@@ -1,5 +1,4 @@
-//! Traffic accounting from RRD data, ported from the module's
-//! `netUsageRrdData`: RRD `netin`/`netout` are average bytes/second per
+//! Traffic accounting from RRD data: RRD `netin`/`netout` are average bytes/second per
 //! sample, so traffic = rate x sample interval, summed from the period start.
 
 use crate::api::types::GuestRef;

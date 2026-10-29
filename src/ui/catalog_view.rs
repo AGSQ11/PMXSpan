@@ -1,5 +1,5 @@
 //! Local OS image catalog: the images offered by "create from catalog" and
-//! "reinstall from catalog". Accepts the HostBill module's catalog JSON as-is.
+//! "reinstall from catalog".
 
 use super::widgets::{self, Confirm};
 use super::{Actions, theme};
@@ -65,7 +65,7 @@ impl CatalogView {
             ui,
             "Images for creating and reinstalling guests straight from a URL instead of a VM template. VM images (qcow2/raw/vmdk/ova) are \
              downloaded to an `import` storage and imported as the boot disk; container templates go to a `vztmpl` storage. \
-             The module's catalog JSON can be pasted in unchanged.",
+             Catalogs can be imported and exported as JSON.",
         );
         if let Some(id) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_delete) {
             match store.lock().remove(&id) {

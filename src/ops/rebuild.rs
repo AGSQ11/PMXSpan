@@ -1,5 +1,4 @@
-//! Reinstall ("rebuild") a guest in place, ported from the module's admin
-//! reinstall flow.
+//! Reinstall ("rebuild") a guest in place.
 //!
 //! The guest keeps its VMID, name, resources, NICs (including MAC addresses,
 //! so DHCP reservations and IPAM bindings stay valid), cloud-init network
@@ -7,9 +6,9 @@
 //! chosen template or OS catalog image. This is destructive and the UI makes
 //! the operator type the VMID to confirm.
 //!
-//! Catalog rebuilds follow the module's `RebuildVmLive*`: the image is
-//! downloaded *before* anything is deleted, so an unreachable mirror or a full
-//! storage leaves the guest untouched; the download is always cleaned up.
+//! Catalog rebuilds download the image *before* anything is deleted, so an
+//! unreachable mirror or a full storage leaves the guest untouched; the
+//! download is always cleaned up.
 
 use super::catalog::{self, Artifact, CatalogEntry};
 use super::create::{Env, apply_catalog_overrides, encode_sshkeys};
@@ -337,7 +336,7 @@ fn with_volume(volume: String, opts: PropString) -> String {
     p.to_string()
 }
 
-/// QEMU reinstall from a catalog image (the module's `RebuildVmLiveQemu`):
+/// QEMU reinstall from a catalog image:
 /// the boot disk is re-created with `import-from`, other disks are re-created
 /// empty with the same size, NICs/cloud-init network config are kept.
 #[allow(clippy::too_many_arguments)]

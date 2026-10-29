@@ -1,8 +1,7 @@
 //! Proxmox VE API client.
 //!
 //! Supports API-token auth (stateless, no CSRF) and ticket auth (password,
-//! optional TOTP second factor, CSRF header on writes, automatic renewal),
-//! matching the two modes the HostBill module's `PVEAPI` class supported.
+//! optional TOTP second factor, CSRF header on writes, automatic renewal).
 
 pub mod tls;
 pub mod types;

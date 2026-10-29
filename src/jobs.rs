@@ -1,8 +1,7 @@
 //! Background jobs: multi-step operations (create, rebuild, migrate, ...) that
 //! run on the runtime and report progress lines to the Jobs panel.
 //!
-//! This replaces the module's deferred queue / admin task log: every job
-//! records each step it performs and the exact error it stopped on.
+//! Every job records each step it performs and the exact error it stopped on.
 
 use parking_lot::Mutex;
 use std::future::Future;

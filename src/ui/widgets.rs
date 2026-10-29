@@ -97,7 +97,7 @@ pub fn fetch_ui<T: Send + 'static>(ui: &mut Ui, f: &mut Fetch<T>, content: impl 
     retry
 }
 
-/// Password entry with show/hide, generate and copy - like the module's admin reinstall form.
+/// Password entry with show/hide, generate and copy.
 pub fn password_field(ui: &mut Ui, value: &mut String, show: &mut bool, id: &str) {
     ui.horizontal(|ui| {
         ui.add(egui::TextEdit::singleline(value).password(!*show).desired_width(220.0).id_salt(id));

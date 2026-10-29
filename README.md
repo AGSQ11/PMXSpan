@@ -2,7 +2,7 @@
 
 A standalone desktop app for managing Proxmox VE clusters on **Windows and Linux**, written in Rust ([egui](https://github.com/emilk/egui)).
 
-It's a port of the `proxmoxopen` HostBill provisioning module. The provisioning logic (placement, create, rebuild, IPAM, cloud-init, bandwidth accounting, tenant isolation, diagnostics) now runs in a native GUI that talks directly to the Proxmox VE API. It doesn't need HostBill, PHP, a web server or a database.
+It handles provisioning (auto-placement, create, rebuild, IP management, cloud-init, OS image catalog, bandwidth accounting, tenant isolation, diagnostics) in a native GUI that talks directly to the Proxmox VE API. It doesn't need a web server, a database or agents on the nodes.
 
 ## Features
 
@@ -15,24 +15,22 @@ It's a port of the `proxmoxopen` HostBill provisioning module. The provisioning 
 | **Guests** | Sortable, filterable list with quick power actions, plus a navigation tree per node. |
 | **Guest detail** | Summary (live status, agent/LXC IP addresses, traffic for the billing period, RRD graphs). Hardware (CPU/memory/options/tags/notes, disk resize/move/add/detach, ISO insert/eject, boot order, raw config). Network (bridge/VLAN/rate/firewall/MAC, LXC addressing). **IP addresses** (see below). Cloud-Init. Snapshots. Backups (back up/restore/protect/delete). Firewall (options, rules, reorder, log). Guest agent (OS/filesystems, set password, run commands). Task history. Manage (password reset, migrate, clone, **rebuild**, HA, pool, template, clear lock, destroy). |
 | **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local), from an **OS catalog image**, or from an ISO, and containers from a `vztmpl` on storage or from the catalog. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. |
-| **Auto-placement** | Ported from the module. Nodes without enough free RAM are skipped. Each remaining node's storage is filtered by content type and free space. The survivors are ordered by your RAM/CPU/Disk priority and picked *dense*, *sparse* or *random*. |
+| **Auto-placement** | Nodes without enough free RAM are skipped. Each remaining node's storage is filtered by content type and free space. The survivors are ordered by your RAM/CPU/Disk priority and picked *dense*, *sparse* or *random*. |
 | **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. |
-| **IP assignment** | Per guest, per interface: assign one or more IPv4/IPv6 addresses from a pool (or an exact one), release them, pick the **main** address of each family, add an interface together with its addresses, remove one (its addresses are released), and adopt addresses already in a guest's config. The main addresses go into the guest config (LXC `netN`, VM cloud-init `ipconfigN`, the pool's VLAN on the NIC); additional ones are configured inside the guest. The **anti-spoofing IP filter** keeps an `ipfilter-netN` ipset per interface in sync with the assigned addresses, as the module did. |
-| **OS image catalog** | Images for creating and reinstalling guests from a URL instead of a template: VM disk images (qcow2/raw/vmdk/ova, imported with `import-from`) and container templates. Accepts the module's catalog JSON unchanged (`{"entries": [...]}` or an array with `id`, `label`, `virt`, `url`, `checksum`, `checksum_algorithm`, `cloud_user`, `ostype`, `nodes`, `config`/`tpl_data`, `image_format`). Images are downloaded to the per-server main or fallback storage with stall detection; permanent errors (404/403) fail at once, transient ones are retried, and a full or broken storage moves on to the next one. The downloaded file is always removed afterwards. |
+| **IP assignment** | Per guest, per interface: assign one or more IPv4/IPv6 addresses from a pool (or an exact one), release them, pick the **main** address of each family, add an interface together with its addresses, remove one (its addresses are released), and adopt addresses already in a guest's config. The main addresses go into the guest config (LXC `netN`, VM cloud-init `ipconfigN`, the pool's VLAN on the NIC); additional ones are configured inside the guest. The **anti-spoofing IP filter** keeps an `ipfilter-netN` ipset per interface in sync with the assigned addresses. |
+| **OS image catalog** | Images for creating and reinstalling guests from a URL instead of a template: VM disk images (qcow2/raw/vmdk/ova, imported with `import-from`) and container templates. Catalogs import and export as JSON (`{"entries": [...]}` or an array with `id`, `label`, `virt`, `url`, `checksum`, `checksum_algorithm`, `cloud_user`, `ostype`, `nodes`, `config`/`tpl_data`, `image_format`). Images are downloaded to the per-server main or fallback storage with stall detection; permanent errors (404/403) fail at once, transient ones are retried, and a full or broken storage moves on to the next one. The downloaded file is always removed afterwards. |
 | **Rebuild / reinstall** | Replaces a guest's disks with a fresh template **or catalog image** while keeping its VMID, name, resources, NICs (**MAC addresses**), IP addresses, firewall rules/ipsets and pool. A catalog image is downloaded *before* anything is deleted, so a failed download leaves the guest untouched. You confirm by typing the VMID. |
 | **Storage** | Browse content, upload ISOs/templates with progress, download from a URL (with optional checksum), browse and download appliance templates, delete volumes. |
 | **Datacenter** | Scheduled backup jobs (create/toggle/run now/delete), storage replication, HA resources and HA status. |
-| **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a `@pve` user with a role on `/pool/<pool>` only, the module's least-privilege client model. |
+| **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a `@pve` user with a role on `/pool/<pool>` only, so customers see nothing outside their pool. |
 | **Jobs** | Every multi-step operation runs in the background and logs each step and the exact error it stopped on, including the tail of the Proxmox task log. No silent failures. |
 | **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
 
-### What was not ported
+### Not included yet
 
-These parts were HostBill-specific and have no meaning in a standalone tool: invoices and metered billing, automatic suspend/unsuspend for overdue accounts or bandwidth overage, client-area pages and widgets, product configuration, and the legacy v1→v2 product migration.
+Per-guest **snapshot schedules** and **reverse DNS** (PTR) management through external DNS backends.
 
-Not ported yet: per-guest **snapshot schedules** (the module's cron-driven snapshot jobs) and **reverse DNS** (PTR) management through external DNS backends.
-
-The Go node daemon, which cleared stale create locks, is replaced by **Manage → Clear lock**. It uses the API's `skiplock`, which Proxmox only honours for `root@pam`.
+Stale create locks are cleared with **Manage → Clear lock**. It uses the API's `skiplock`, which Proxmox only honours for `root@pam`.
 
 ## Install
 
@@ -95,7 +93,7 @@ Logs rotate daily and are kept for 14 days. Set `PXP_LOG=debug` for verbose logs
 
 ## Setting up the OS image catalog
 
-1. Open **OS image catalog**. Add images one by one, or use **Import JSON…** to paste the module's catalog.
+1. Open **OS image catalog**. Add images one by one, or use **Import JSON…** to paste a whole catalog.
 2. In **Servers → Edit**, set the catalog download storages: a storage with the `import` content type for VM images and one with `vztmpl` for container templates. A fallback storage is optional. (In Proxmox, enable the content type under Datacenter → Storage → Edit → Content. `import` needs Proxmox VE 8.2 or newer.)
 3. Download timeouts are in **Settings**: a download whose task log stops growing for the *stall* time is aborted and retried elsewhere.
 
@@ -120,7 +118,7 @@ Then add a server `127.0.0.1:8006` and log in with:
 ```
 src/
   api/          Proxmox API client (auth, TLS pinning, task waiting, uploads) and typed responses
-  ops/          provisioning logic ported from the module:
+  ops/          provisioning logic:
                 create, rebuild, OS catalog, IP assignment, placement, guest ops,
                 diagnostics, bandwidth, tenant
   ipam.rs       local IP address management
