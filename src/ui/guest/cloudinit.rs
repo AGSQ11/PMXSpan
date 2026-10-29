@@ -144,6 +144,7 @@ impl CloudInitTab {
                                     v6,
                                     preferred: Some(self.ipam_preferred.clone()).filter(|s| !s.trim().is_empty()),
                                     pool_id: self.ipam_pool.clone(),
+                                    iface: key.trim_start_matches("ipconfig").parse().unwrap_or(0),
                                 };
                                 match gc.sh.ipam.lock().allocate(&req) {
                                     Ok(a) => {

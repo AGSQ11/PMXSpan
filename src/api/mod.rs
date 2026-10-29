@@ -65,6 +65,9 @@ impl Params {
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }
+    pub fn get(&self, k: &str) -> Option<&str> {
+        self.0.iter().find(|(key, _)| key == k).map(|(_, v)| v.as_str())
+    }
 }
 
 #[derive(Clone)]

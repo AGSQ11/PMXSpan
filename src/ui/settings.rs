@@ -107,6 +107,24 @@ impl SettingsView {
                 ui.label("Task watch timeout");
                 ui.add(egui::DragValue::new(&mut s.task_timeout_secs).range(60..=86400).suffix(" s"));
                 ui.end_row();
+                ui.label("Catalog downloads");
+                ui.horizontal(|ui| {
+                    ui.label("stalled after");
+                    ui.add(egui::DragValue::new(&mut s.download_stall_secs).range(30..=3600).suffix(" s"))
+                        .on_hover_text("A download whose task log stops growing for this long is aborted and retried elsewhere.");
+                    ui.label("give up after");
+                    ui.add(egui::DragValue::new(&mut s.download_max_wait_secs).range(60..=86400).suffix(" s"));
+                    ui.label("min. free space");
+                    let mut gib = s.download_min_bytes as f64 / 1073741824.0;
+                    if ui
+                        .add(egui::DragValue::new(&mut gib).range(0.0..=1024.0).speed(0.5).suffix(" GiB"))
+                        .on_hover_text("0 = automatic (image size, at least 3 GiB / 1 GiB)")
+                        .changed()
+                    {
+                        s.download_min_bytes = (gib * 1073741824.0) as u64;
+                    }
+                });
+                ui.end_row();
             });
         });
         if serde_json::to_string(s).unwrap_or_default() != before {

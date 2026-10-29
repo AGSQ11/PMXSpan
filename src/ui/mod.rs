@@ -2,6 +2,7 @@
 //! periodic cluster refresh that feeds every view.
 
 mod access;
+mod catalog_view;
 mod charts;
 mod cluster;
 mod create;
@@ -25,6 +26,7 @@ use crate::api::{LoginOutcome, PveClient};
 use crate::config::{AppConfig, AppPaths, ServerProfile, Settings, ThemePref};
 use crate::ipam::IpamDb;
 use crate::jobs::{JobCtx, JobStatus, Jobs};
+use crate::ops::catalog::CatalogStore;
 use crate::rt::Fetch;
 use crate::vault::Vault;
 use egui::RichText;
@@ -45,6 +47,7 @@ pub enum Nav {
     Cluster,
     Access,
     Ipam,
+    Catalog,
     Create,
     Servers,
     Settings,
@@ -52,7 +55,7 @@ pub enum Nav {
 
 impl Nav {
     fn needs_session(&self) -> bool {
-        !matches!(self, Nav::Ipam | Nav::Servers | Nav::Settings)
+        !matches!(self, Nav::Ipam | Nav::Catalog | Nav::Servers | Nav::Settings)
     }
 }
 
@@ -103,6 +106,7 @@ pub struct Shared {
     pub jobs: Jobs,
     pub settings: Settings,
     pub ipam: Arc<Mutex<IpamDb>>,
+    pub catalog: Arc<Mutex<CatalogStore>>,
     pub resources: Arc<Vec<Resource>>,
 }
 
@@ -111,6 +115,7 @@ impl Shared {
         crate::ops::create::Env {
             client: self.client.clone(),
             server_id: self.server_id.clone(),
+            profile: self.profile.clone(),
             settings: self.settings.clone(),
             ipam: self.ipam.clone(),
         }
@@ -268,6 +273,7 @@ pub struct App {
     vault: Option<Vault>,
     unlock: unlock::UnlockView,
     ipam: Arc<Mutex<IpamDb>>,
+    catalog: Arc<Mutex<CatalogStore>>,
     jobs: Jobs,
     session: Option<Session>,
     connecting: Option<Connecting>,
@@ -277,6 +283,7 @@ pub struct App {
     servers: servers::ServersView,
     settings: settings::SettingsView,
     ipam_view: ipam_view::IpamView,
+    catalog_view: catalog_view::CatalogView,
     jobs_panel: jobs_panel::JobsPanel,
     toasts: Vec<Toast>,
     job_states: HashMap<u64, JobStatus>,
@@ -289,6 +296,7 @@ impl App {
     pub fn new(paths: AppPaths) -> Self {
         let config = AppConfig::load(&paths.config_file());
         let ipam = Arc::new(Mutex::new(IpamDb::load(&paths.ipam_file())));
+        let catalog = Arc::new(Mutex::new(CatalogStore::load(&paths.catalog_file())));
         let vault = if Vault::exists(&paths.vault_file()) { Vault::open(&paths.vault_file()).ok() } else { None };
         let mut app = Self {
             unlock: unlock::UnlockView::new(vault.as_ref()),
@@ -296,6 +304,7 @@ impl App {
             config,
             vault,
             ipam,
+            catalog,
             jobs: Jobs::default(),
             session: None,
             connecting: None,
@@ -304,6 +313,7 @@ impl App {
             servers: Default::default(),
             settings: Default::default(),
             ipam_view: Default::default(),
+            catalog_view: Default::default(),
             jobs_panel: Default::default(),
             toasts: Vec::new(),
             job_states: HashMap::new(),
@@ -363,6 +373,7 @@ impl App {
                     jobs: self.jobs.clone(),
                     settings: self.config.settings.clone(),
                     ipam: self.ipam.clone(),
+                    catalog: self.catalog.clone(),
                     resources: Arc::new(Vec::new()),
                 };
                 self.session = Some(Session::new(shared));
@@ -537,7 +548,12 @@ impl App {
                 }
                 ui.add_space(6.0);
                 ui.label(RichText::new("LOCAL").small().color(theme::MUTED));
-                for (label, nav) in [("IP address management", Nav::Ipam), ("Servers", Nav::Servers), ("Settings & logs", Nav::Settings)] {
+                for (label, nav) in [
+                    ("IP address management", Nav::Ipam),
+                    ("OS image catalog", Nav::Catalog),
+                    ("Servers", Nav::Servers),
+                    ("Settings & logs", Nav::Settings),
+                ] {
                     if ui.selectable_label(self.nav == nav, label).clicked() {
                         actions.nav(nav);
                     }
@@ -619,6 +635,7 @@ impl App {
                 let shared = self.session.as_ref().map(|s| s.shared.clone());
                 self.ipam_view.ui(ui, &self.ipam, &self.config, shared.as_ref(), actions);
             }
+            Nav::Catalog => self.catalog_view.ui(ui, &self.catalog, actions),
             nav => {
                 let Some(s) = self.session.as_mut() else { return };
                 let shared = s.shared.clone();
@@ -649,7 +666,7 @@ impl App {
                     Nav::Cluster => s.cluster.ui(ui, &shared, actions),
                     Nav::Access => s.access.ui(ui, &shared, actions),
                     Nav::Create => s.create.ui(ui, &shared, actions),
-                    Nav::Servers | Nav::Settings | Nav::Ipam => {}
+                    Nav::Servers | Nav::Settings | Nav::Ipam | Nav::Catalog => {}
                 }
             }
         }

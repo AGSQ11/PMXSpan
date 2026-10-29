@@ -123,6 +123,24 @@ pub struct Assignment {
     pub reserved: bool,
     pub note: String,
     pub assigned_at: i64,
+    /// Guest interface index (`net<N>`) the address belongs to.
+    pub iface: Option<u32>,
+    /// The address pushed into the guest's network config for its family
+    /// (LXC `netN ip=`, QEMU cloud-init `ipconfigN`). Others are additional
+    /// addresses: tracked, allowed by the IP filter, configured in the guest.
+    pub main: bool,
+}
+
+impl Assignment {
+    pub fn is_v6(&self) -> bool {
+        self.ip.contains(':')
+    }
+    pub fn iface(&self) -> u32 {
+        self.iface.unwrap_or(0)
+    }
+    fn same_slot(&self, server_id: &str, vmid: u64, iface: u32, v6: bool) -> bool {
+        self.server_id == server_id && self.vmid == Some(vmid) && self.iface() == iface && self.is_v6() == v6
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -146,6 +164,8 @@ pub struct AllocRequest {
     pub preferred: Option<String>,
     /// Restrict to one pool.
     pub pool_id: Option<String>,
+    /// Guest interface index the address is for.
+    pub iface: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -155,13 +175,43 @@ pub struct Allocation {
     pub gateway: String,
     pub pool_id: String,
     pub dns: String,
+    pub vlan: Option<u16>,
+    pub main: bool,
 }
 
 impl IpamDb {
     pub fn load(path: &Path) -> Self {
         let mut db: IpamDb = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
         db.path = path.to_path_buf();
+        db.normalize();
         db
+    }
+
+    /// Upgrades older databases: guest addresses without an interface belong
+    /// to net0, and every (guest, interface, family) gets exactly one main address.
+    fn normalize(&mut self) {
+        for a in self.assignments.iter_mut() {
+            if a.vmid.is_some() && a.iface.is_none() {
+                a.iface = Some(0);
+            }
+        }
+        let mut seen_main = std::collections::HashSet::new();
+        for a in self.assignments.iter_mut().filter(|a| a.vmid.is_some() && a.main) {
+            let key = (a.server_id.clone(), a.vmid, a.iface(), a.is_v6());
+            if !seen_main.insert(key) {
+                a.main = false;
+            }
+        }
+        let n = self.assignments.len();
+        for i in 0..n {
+            let a = &self.assignments[i];
+            let Some(vmid) = a.vmid else { continue };
+            let key = (a.server_id.clone(), Some(vmid), a.iface(), a.is_v6());
+            if !seen_main.contains(&key) {
+                self.assignments[i].main = true;
+                seen_main.insert(key);
+            }
+        }
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -229,31 +279,140 @@ impl IpamDb {
     }
 
     fn allocation(&self, pool: &Pool, ip: String) -> Allocation {
-        Allocation { cidr: pool.cidr_for(&ip), gateway: pool.gateway.clone(), pool_id: pool.id.clone(), dns: pool.dns.clone(), ip }
+        Allocation {
+            cidr: pool.cidr_for(&ip),
+            gateway: pool.gateway.clone(),
+            pool_id: pool.id.clone(),
+            dns: pool.dns.clone(),
+            vlan: pool.vlan,
+            main: false,
+            ip,
+        }
     }
 
-    /// Plans and records an allocation.
+    fn has_main(&self, server_id: &str, vmid: u64, iface: u32, v6: bool) -> bool {
+        self.assignments.iter().any(|a| a.main && a.same_slot(server_id, vmid, iface, v6))
+    }
+
+    fn record(&mut self, req: &AllocRequest, mut a: Allocation) -> Allocation {
+        if let Some(existing) = self.assignments.iter().find(|x| x.ip == a.ip) {
+            a.main = existing.main;
+            return a;
+        }
+        a.main = !self.has_main(&req.server_id, req.vmid, req.iface, req.v6);
+        self.assignments.push(Assignment {
+            ip: a.ip.clone(),
+            pool_id: a.pool_id.clone(),
+            server_id: req.server_id.clone(),
+            vmid: Some(req.vmid),
+            hostname: req.hostname.clone(),
+            reserved: false,
+            note: String::new(),
+            assigned_at: chrono::Utc::now().timestamp(),
+            iface: Some(req.iface),
+            main: a.main,
+        });
+        a
+    }
+
+    /// Plans and records an allocation. The first address of a family on an
+    /// interface becomes its main address.
     pub fn allocate(&mut self, req: &AllocRequest) -> anyhow::Result<Allocation> {
         let a = self.plan(req)?;
-        if !self.assignments.iter().any(|x| x.ip == a.ip) {
-            self.assignments.push(Assignment {
-                ip: a.ip.clone(),
-                pool_id: a.pool_id.clone(),
-                server_id: req.server_id.clone(),
-                vmid: Some(req.vmid),
-                hostname: req.hostname.clone(),
-                reserved: false,
-                note: String::new(),
-                assigned_at: chrono::Utc::now().timestamp(),
-            });
-        }
+        let a = self.record(req, a);
         self.save()?;
         Ok(a)
     }
 
+    /// Allocates `count` addresses atomically: either all are recorded or none.
+    /// A preferred address (if any) is the first one; the rest come from the same pool rules.
+    pub fn allocate_many(&mut self, req: &AllocRequest, count: usize) -> anyhow::Result<Vec<Allocation>> {
+        let snapshot = self.assignments.clone();
+        let mut out = Vec::new();
+        for i in 0..count.max(1) {
+            let r = if i == 0 { req.clone() } else { AllocRequest { preferred: None, ..req.clone() } };
+            match self.plan(&r) {
+                Ok(a) => out.push(self.record(&r, a)),
+                Err(e) => {
+                    self.assignments = snapshot;
+                    let done = if i > 0 { format!(" (only {i} of {count} were available)") } else { String::new() };
+                    return Err(e.context(format!("could not allocate {count} address(es){done}")));
+                }
+            }
+        }
+        self.save()?;
+        Ok(out)
+    }
+
+    /// Releases an address. If it was the main address of its interface/family,
+    /// the next address of the same slot is promoted so the guest keeps a main IP.
     pub fn release_ip(&mut self, ip: &str) -> anyhow::Result<()> {
+        let removed: Vec<Assignment> = self.assignments.iter().filter(|a| a.ip == ip && !a.reserved).cloned().collect();
         self.assignments.retain(|a| a.ip != ip || a.reserved);
+        for r in removed.iter().filter(|r| r.main) {
+            if let Some(vmid) = r.vmid
+                && let Some(next) = self.assignments.iter_mut().find(|a| a.same_slot(&r.server_id, vmid, r.iface(), r.is_v6()))
+            {
+                next.main = true;
+            }
+        }
         self.save()
+    }
+
+    /// Makes `ip` the main address of its interface/family.
+    pub fn set_main(&mut self, ip: &str) -> anyhow::Result<()> {
+        let target = self.assignments.iter().find(|a| a.ip == ip).cloned().ok_or_else(|| anyhow!("{ip} is not assigned"))?;
+        let vmid = target.vmid.ok_or_else(|| anyhow!("{ip} is not assigned to a guest"))?;
+        for a in self.assignments.iter_mut().filter(|a| a.same_slot(&target.server_id, vmid, target.iface(), target.is_v6())) {
+            a.main = a.ip == ip;
+        }
+        self.save()
+    }
+
+    /// Releases every address on one interface of a guest.
+    pub fn release_iface(&mut self, server_id: &str, vmid: u64, iface: u32) -> anyhow::Result<Vec<String>> {
+        let mut released = Vec::new();
+        self.assignments.retain(|a| {
+            let hit = a.server_id == server_id && a.vmid == Some(vmid) && a.iface() == iface && !a.reserved;
+            if hit {
+                released.push(a.ip.clone());
+            }
+            !hit
+        });
+        self.save()?;
+        Ok(released)
+    }
+
+    /// Records an address the guest already uses (adoption). It must lie in a
+    /// pool and be free.
+    pub fn register_existing(&mut self, server_id: &str, vmid: u64, iface: u32, ip: &str, hostname: &str) -> anyhow::Result<Allocation> {
+        let addr = IpAddr::from_str(ip.trim()).map_err(|_| anyhow!("'{ip}' is not an IP address"))?;
+        let pool = self
+            .pools
+            .iter()
+            .find(|p| p.net().map(|n| n.contains(&addr)).unwrap_or(false))
+            .cloned()
+            .ok_or_else(|| anyhow!("{addr} is not inside any IPAM pool"))?;
+        if let Some(a) = self.assignments.iter().find(|a| a.ip == addr.to_string())
+            && (a.vmid != Some(vmid) || a.server_id != server_id)
+        {
+            bail!(
+                "{addr} is already {}",
+                if a.reserved { "reserved".to_string() } else { format!("assigned to VMID {}", a.vmid.unwrap_or(0)) }
+            );
+        }
+        let req =
+            AllocRequest { server_id: server_id.into(), vmid, hostname: hostname.into(), v6: addr.is_ipv6(), iface, ..Default::default() };
+        let a = self.allocation(&pool, addr.to_string());
+        let a = self.record(&req, a);
+        self.save()?;
+        Ok(a)
+    }
+
+    /// The main address (with its pool) of one family on one guest interface.
+    pub fn main_for(&self, server_id: &str, vmid: u64, iface: u32, v6: bool) -> Option<(Assignment, Option<Pool>)> {
+        let a = self.assignments.iter().find(|a| a.main && a.same_slot(server_id, vmid, iface, v6))?;
+        Some((a.clone(), self.pool(&a.pool_id).cloned()))
     }
 
     /// Releases every non-reserved address held by a guest.
@@ -351,5 +510,51 @@ mod tests {
         assert!(db.plan(&v6).unwrap_err().to_string().contains("no IPv6 pools"));
         let wrong_bridge = AllocRequest { bridge: "vmbr9".into(), ..Default::default() };
         assert!(db.plan(&wrong_bridge).unwrap_err().to_string().contains("no IPv4 pool matches"));
+    }
+
+    #[test]
+    fn main_address_and_promotion() {
+        let mut db = db();
+        let req = AllocRequest { server_id: "s".into(), vmid: 100, bridge: "vmbr0".into(), ..Default::default() };
+        let ips = db.allocate_many(&req, 3).unwrap();
+        assert_eq!(ips.iter().map(|a| a.main).collect::<Vec<_>>(), vec![true, false, false]);
+        // A second interface gets its own main address.
+        let n1 = db.allocate(&AllocRequest { iface: 1, ..req.clone() }).unwrap();
+        assert!(n1.main);
+        db.set_main(&ips[2].ip).unwrap();
+        assert_eq!(db.main_for("s", 100, 0, false).unwrap().0.ip, ips[2].ip);
+        // Releasing the main promotes another address on the same interface.
+        db.release_ip(&ips[2].ip).unwrap();
+        let m = db.main_for("s", 100, 0, false).unwrap().0.ip;
+        assert!(m == ips[0].ip || m == ips[1].ip);
+        assert_eq!(db.main_for("s", 100, 1, false).unwrap().0.ip, n1.ip);
+        let _ = std::fs::remove_file(&db.path);
+    }
+
+    #[test]
+    fn allocate_many_is_atomic() {
+        let mut db = db();
+        let req = AllocRequest { server_id: "s".into(), vmid: 100, bridge: "vmbr0".into(), ..Default::default() };
+        // Only 5 usable addresses in a /29 without the gateway.
+        let err = db.allocate_many(&req, 6).unwrap_err();
+        assert!(format!("{err:#}").contains("only 5 of 6"));
+        assert!(db.assignments.is_empty(), "partial allocation must be rolled back");
+        let _ = std::fs::remove_file(&db.path);
+    }
+
+    #[test]
+    fn adopt_existing_and_normalize_legacy() {
+        let mut db = db();
+        let a = db.register_existing("s", 100, 0, "192.0.2.4", "web").unwrap();
+        assert!(a.main);
+        assert!(db.register_existing("s", 101, 0, "192.0.2.4", "x").is_err());
+        assert!(db.register_existing("s", 101, 0, "10.9.9.9", "x").is_err());
+        // Legacy rows (no iface/main) are upgraded on load.
+        db.assignments.push(Assignment { ip: "192.0.2.5".into(), server_id: "s".into(), vmid: Some(7), ..Default::default() });
+        db.normalize();
+        let legacy = db.assignments.iter().find(|x| x.ip == "192.0.2.5").unwrap();
+        assert_eq!(legacy.iface, Some(0));
+        assert!(legacy.main);
+        let _ = std::fs::remove_file(&db.path);
     }
 }

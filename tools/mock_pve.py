@@ -36,7 +36,7 @@ NODES = {
 }
 
 STORAGES = {
-    "local": {"type": "dir", "content": "iso,vztmpl,backup,snippets", "shared": 0, "total": 100 * 2**30, "used": 22 * 2**30},
+    "local": {"type": "dir", "content": "iso,vztmpl,backup,snippets,import", "shared": 0, "total": 100 * 2**30, "used": 22 * 2**30},
     "local-lvm": {"type": "lvmthin", "content": "images,rootdir", "shared": 0, "total": 900 * 2**30, "used": 310 * 2**30},
     "ceph": {"type": "rbd", "content": "images,rootdir", "shared": 1, "total": 4000 * 2**30, "used": 1200 * 2**30},
 }
@@ -384,8 +384,15 @@ class Handler(BaseHTTPRequestHandler):
             if what == "upload":
                 return new_task(node, "imgcopy", "")
             if what == "download-url":
-                items.append({"volid": f"{st}:{a['content']}/{a['filename']}", "content": a["content"], "format": "iso", "size": 5 * 2**20})
-                return new_task(node, "download", a["filename"])
+                # URLs containing "404" fail permanently, like a missing image upstream.
+                if "404" in a.get("url", ""):
+                    return new_task(node, "download", a["filename"], ok=False, duration=2,
+                                    log=[f"downloading {a.get('url')} to {a['filename']}",
+                                         "download failed: 404 Not Found", "TASK ERROR: download failed: 404 Not Found"])
+                fmt = a["filename"].rsplit(".", 1)[-1]
+                items.append({"volid": f"{st}:{a['content']}/{a['filename']}", "content": a["content"], "format": fmt, "size": 600 * 2**20})
+                return new_task(node, "download", a["filename"], duration=3,
+                                log=[f"downloading {a.get('url')} to {a['filename']}", "  10% ...", "  60% ...", "100% done", "TASK OK"])
             if vol and method == "DELETE":
                 CONTENT[st] = [i for i in items if i["volid"] != vol]
                 return new_task(node, "imgdel", "")
@@ -432,6 +439,15 @@ class Handler(BaseHTTPRequestHandler):
             for k, v in a.items():
                 if not k.startswith("_") and k not in ("vmid", "pool", "password", "ssh-public-keys", "start", "storage"):
                     g[k] = v
+            # Disks given as `storage:size` / `import-from=` become allocated volumes.
+            for k, v in list(g.items()):
+                if re.fullmatch(r"(scsi|virtio|sata|ide|efidisk|tpmstate)\d+|rootfs|mp\d+", k) and isinstance(v, str) and "media=cdrom" not in v:
+                    head, _, opts = v.partition(",")
+                    mt = re.fullmatch(r"([^:]+):(\d+)", head)
+                    if mt:
+                        size = "3" if "import-from=" in opts else mt.group(2)
+                        opts = ",".join(o for o in opts.split(",") if o and not o.startswith("import-from=") and not o.startswith("size="))
+                        g[k] = f"{mt.group(1)}:vm-{vmid}-disk-{k},size={size}G" + (f",{opts}" if opts else "")
             return new_task(node, "qmcreate" if kind == "qemu" else "vzcreate", vmid, duration=2.5)
         gm = re.fullmatch(r"/(qemu|lxc)/(\d+)(/.*)?", rest)
         if not gm:
@@ -441,6 +457,7 @@ class Handler(BaseHTTPRequestHandler):
         cfg = g["cfg"]
         if sub == "" and method == "DELETE":
             del GUESTS[vmid]
+            FIREWALL.pop(vmid, None)  # like PVE, destroying a guest deletes its firewall config
             return new_task(node, "qmdestroy" if kind == "qemu" else "vzdestroy", vmid)
         if sub == "/config":
             if method == "GET":
@@ -530,6 +547,39 @@ class Handler(BaseHTTPRequestHandler):
             if cmd == "set-user-password":
                 return None
             return {"result": {}}
+        if sub == "/firewall/aliases":
+            aliases = FIREWALL[vmid].setdefault("aliases", [])
+            if method == "POST":
+                aliases.append({k: v for k, v in a.items() if not k.startswith("_")})
+                return None
+            return aliases
+        ips = re.fullmatch(r"/firewall/ipset(/([^/]+)(/(.+))?)?", sub)
+        if ips:
+            sets = FIREWALL[vmid].setdefault("ipsets", {})
+            name, cidr = ips.group(2), ips.group(4)
+            if not name:
+                if method == "POST":
+                    sets.setdefault(a["name"], {"comment": a.get("comment", ""), "entries": []})
+                    return None
+                return [{"name": n, "comment": d["comment"]} for n, d in sets.items()]
+            if name not in sets:
+                raise KeyError(f"no such IPSet '{name}'")
+            entries = sets[name]["entries"]
+            if cidr:
+                if method == "DELETE":
+                    sets[name]["entries"] = [e for e in entries if e["cidr"] != cidr]
+                return None
+            if method == "DELETE":
+                if entries:
+                    raise ValueError("IPSet is not empty")
+                del sets[name]
+                return None
+            if method == "POST":
+                if any(e["cidr"] == a["cidr"] for e in entries):
+                    raise ValueError(f"entry '{a['cidr']}' already exists")
+                entries.append({"cidr": a["cidr"], "comment": a.get("comment", "")})
+                return None
+            return entries
         fw = re.fullmatch(r"/firewall/(options|rules|log)(/(\d+))?", sub)
         if fw:
             f = FIREWALL[vmid]
