@@ -4,6 +4,12 @@ A standalone desktop app for managing Proxmox VE clusters on **Windows and Linux
 
 It handles provisioning (auto-placement, create, rebuild, IP management, cloud-init, OS image catalog, bandwidth accounting, tenant isolation, diagnostics) in a native GUI that talks directly to the Proxmox VE API. It doesn't need a web server, a database or agents on the nodes.
 
+<p align="center">
+  <img src="screenshots/dashboard.png" alt="Dashboard in the Graphite (dark) theme" width="49%">
+  <img src="screenshots/dashboard-light.png" alt="Dashboard in the Daylight (light) theme" width="49%">
+</p>
+<p align="center"><sub>Graphite (dark) and Daylight (light). Every screenshot in this README was taken against the bundled mock cluster. More in <a href="#screenshots">Screenshots</a>.</sub></p>
+
 ## Features
 
 | Area | What you get |
@@ -32,6 +38,88 @@ It handles provisioning (auto-placement, create, rebuild, IP management, cloud-i
 Per-guest **snapshot schedules** and **reverse DNS** (PTR) management through external DNS backends.
 
 Stale create locks are cleared with **Manage → Clear lock**. It uses the API's `skiplock`, which Proxmox only honours for `root@pam`.
+
+## Screenshots
+
+### Overview
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/dashboard.png" alt="Dashboard"><br><sub><b>Dashboard</b>: nodes, running guests, CPU and memory, a guest table with main IPs, node usage and recent tasks.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/search.png" alt="Global search"><br><sub><b>Search</b>: find guests by name, VMID, tag or IP address from anywhere.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/guests.png" alt="Guest list"><br><sub><b>Guests</b>: sortable, filterable list with quick power actions.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/jobs.png" alt="Jobs panel"><br><sub><b>Jobs</b>: every long operation runs in the background with a step-by-step log.</sub></td>
+  </tr>
+</table>
+
+### Guests
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/vm-summary.png" alt="VM summary"><br><sub><b>Summary</b>: resources, IP addresses, traffic for the billing period and performance graphs.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-ip-addresses.png" alt="IP addresses tab"><br><sub><b>IP addresses</b>: several addresses per interface, main address per family, anti-spoofing IP filter.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/vm-hardware.png" alt="Hardware tab"><br><sub><b>Hardware</b>: CPU, memory, options, disks, CD-ROM and boot order.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-network.png" alt="Network tab"><br><sub><b>Network</b>: interfaces (bridge, VLAN, rate limit, firewall, MAC).</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/vm-cloud-init.png" alt="Cloud-Init tab"><br><sub><b>Cloud-Init</b>: user, password, SSH keys, DNS and per-NIC addressing from IPAM.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-snapshots.png" alt="Snapshots tab"><br><sub><b>Snapshots</b>: take (optionally with RAM), roll back and delete.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/vm-backups.png" alt="Backups tab"><br><sub><b>Backups</b>: back up now, restore, protect and delete.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-firewall.png" alt="Firewall tab"><br><sub><b>Firewall</b>: options, ordered rules and the firewall log.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/vm-guest-agent.png" alt="Guest agent tab"><br><sub><b>Guest agent</b>: OS info, filesystems, set a user password, run commands.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-rebuild-from-catalog.png" alt="Manage tab"><br><sub><b>Manage</b>: password reset, migrate, clone, rebuild from a template or the OS catalog, HA and pool.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/container.png" alt="Container summary"><br><sub><b>Containers</b> get the same views, with root disk and swap usage.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/create-from-catalog.png" alt="Create wizard"><br><sub><b>Create</b>: VMs from a template, an ISO or an OS catalog image; containers from a template or the catalog.</sub></td>
+  </tr>
+</table>
+
+### Datacenter
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/node.png" alt="Node view"><br><sub><b>Node</b>: status, versions, updates, power actions and graphs.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/storage.png" alt="Storage view"><br><sub><b>Storage</b>: browse content, upload, download from a URL, appliance templates.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/tasks.png" alt="Task log"><br><sub><b>Tasks</b>: the cluster task log with filters and each task's log.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/backup-ha.png" alt="Backup jobs"><br><sub><b>Backup · Replication · HA</b>: scheduled backup jobs, replication and HA resources.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/tenant-wizard.png" alt="Tenant wizard"><br><sub><b>Users · Pools · Tenants</b>: a pool and a user limited to it in one step; users, tokens, pools and ACLs.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/ipam.png" alt="IP address management"><br><sub><b>IP address management</b>: pools, ranges, gateways, VLANs, reservations and every assignment.</sub></td>
+  </tr>
+</table>
+
+### Setup
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/os-catalog.png" alt="OS image catalog"><br><sub><b>OS image catalog</b>: cloud images and container templates by URL, JSON import and export.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/servers.png" alt="Server profile"><br><sub><b>Servers</b>: API token or password login with TOTP, certificate pinning, catalog download storages.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/diagnostics.png" alt="Connection diagnostics"><br><sub><b>Diagnostics</b>: version, quorum, nodes, storage capabilities and effective privileges.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/settings.png" alt="Settings"><br><sub><b>Settings</b>: theme, placement policy, defaults for new guests, download timeouts.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/cluster-switcher-light.png" alt="Cluster switcher"><br><sub><b>Cluster switcher</b>: change server, open the web UI or disconnect (Daylight theme).</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-summary-light.png" alt="VM summary in light theme"><br><sub><b>Daylight</b> theme on a VM page.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/unlock.png" alt="Unlock screen"><br><sub><b>Vault</b>: credentials are encrypted with a master password (Argon2id + XChaCha20-Poly1305).</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/dashboard-light.png" alt="Dashboard in light theme"><br><sub><b>Daylight</b> theme on the Dashboard.</sub></td>
+  </tr>
+</table>
 
 ## Install
 
@@ -128,6 +216,7 @@ src/
   rt.rs         UI <-> tokio bridge (Fetch handles)
   ui/           egui views
 assets/fonts/   bundled fonts and their licenses
+screenshots/    the images in this README
 tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
