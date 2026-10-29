@@ -148,7 +148,7 @@ impl BackupsTab {
                         if ui.small_button(lock).clicked() {
                             toggle = Some((storage.clone(), b.volid.clone(), !b.protected));
                         }
-                        if !b.protected && ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked() {
+                        if !b.protected && ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
                             pending = Some(
                                 Confirm::new(
                                     "Delete backup",

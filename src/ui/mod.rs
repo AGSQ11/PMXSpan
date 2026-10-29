@@ -31,7 +31,7 @@ use crate::rt::Fetch;
 use crate::vault::Vault;
 use egui::RichText;
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -288,6 +288,8 @@ pub struct App {
     toasts: Vec<Toast>,
     job_states: HashMap<u64, JobStatus>,
     sidebar_filter: String,
+    search: String,
+    collapsed_nodes: HashSet<String>,
     applied_theme: Option<(ThemePref, bool)>,
     applied_scale: f32,
 }
@@ -318,6 +320,8 @@ impl App {
             toasts: Vec::new(),
             job_states: HashMap::new(),
             sidebar_filter: String::new(),
+            search: String::new(),
+            collapsed_nodes: HashSet::new(),
             applied_theme: None,
             applied_scale: 0.0,
         };
@@ -464,157 +468,395 @@ impl App {
         }
     }
 
+    /// Breadcrumb for the current view: (context, title).
+    fn crumbs(&self) -> (String, String) {
+        let cluster = self.session.as_ref().map(|s| s.shared.profile.display_name()).unwrap_or_else(|| "ProxmoxPanel".into());
+        let title = match &self.nav {
+            Nav::Dashboard => "Dashboard".to_string(),
+            Nav::Guests => "Guests".into(),
+            Nav::Guest(kind, vmid) => {
+                let name = self.session.as_ref().and_then(|s| s.shared.find_guest(*kind, *vmid)).map(|r| r.display_name());
+                return (format!("{cluster}  ›  Guests"), name.unwrap_or_else(|| format!("{} {vmid}", kind.label())));
+            }
+            Nav::Node(n) => return (format!("{cluster}  ›  Nodes"), n.clone()),
+            Nav::Storage => "Storage".into(),
+            Nav::Tasks => "Tasks".into(),
+            Nav::Cluster => "Backup · Replication · HA".into(),
+            Nav::Access => "Users · Pools · Tenants".into(),
+            Nav::Create => "Create guest".into(),
+            Nav::Ipam => return ("Local".into(), "IP address management".into()),
+            Nav::Catalog => return ("Local".into(), "OS image catalog".into()),
+            Nav::Servers => return ("Local".into(), "Servers".into()),
+            Nav::Settings => return ("Local".into(), "Settings & logs".into()),
+        };
+        (cluster, title)
+    }
+
     fn top_bar(&mut self, ui: &mut egui::Ui, actions: &mut Actions) {
-        egui::Panel::top("top").show(ui, |ui| {
+        let p = theme::p();
+        let frame = egui::Frame::new().fill(p.side).inner_margin(egui::Margin::symmetric(24, 10));
+        egui::Panel::top("top").frame(frame).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("ProxmoxPanel").strong().color(theme::ACCENT).size(16.0));
-                ui.separator();
-                let current = self
-                    .session
-                    .as_ref()
-                    .map(|s| s.shared.profile.display_name())
-                    .or_else(|| self.connecting.as_ref().and_then(|c| self.config.profile(&c.profile_id)).map(|p| p.display_name()))
-                    .unwrap_or_else(|| "Not connected".into());
-                egui::ComboBox::from_id_salt("server-switch").selected_text(current).width(200.0).show_ui(ui, |ui| {
-                    for p in &self.config.profiles {
-                        let active = self.session.as_ref().map(|s| s.shared.server_id == p.id).unwrap_or(false);
-                        if ui.selectable_label(active, p.display_name()).clicked() && !active {
-                            actions.0.push(Action::Connect(p.id.clone()));
-                        }
-                    }
-                    ui.separator();
-                    if ui.selectable_label(false, "Manage servers…").clicked() {
-                        actions.nav(Nav::Servers);
-                    }
+                let (context, title) = self.crumbs();
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.label(RichText::new(context).size(12.0).color(p.muted));
+                    ui.label(theme::bold(title, 18.0));
                 });
-                if self.connecting.is_some() {
-                    ui.spinner();
-                    ui.label("Connecting…");
-                } else if let Some(s) = self.session.as_mut() {
-                    if s.resources_fetch.is_loading() && !s.loaded_once {
-                        ui.spinner();
-                    }
-                    ui.label(RichText::new(format!("● {}", s.shared.client.userid())).color(theme::OK))
-                        .on_hover_text(s.shared.profile.web_url());
-                    if let Some(e) = &s.error {
-                        ui.label(RichText::new("⚠ refresh failed").color(theme::ERR)).on_hover_text(e);
-                    }
-                    if ui.button("⟳").on_hover_text("Refresh now").clicked() {
-                        actions.refresh();
-                    }
-                    if ui.button("Disconnect").clicked() {
-                        actions.0.push(Action::Disconnect);
-                    }
-                    ui.separator();
-                    if ui.button(RichText::new("＋ Create guest").strong()).clicked() {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if self.session.is_some() && widgets::primary_button(ui, format!("{}  Create guest", theme::icon::PLUS)).clicked() {
                         actions.0.push(Action::OpenCreate(Box::default()));
                     }
-                    if ui.button("Open web UI").on_hover_text("Open the Proxmox web interface in your browser").clicked() {
-                        let _ = webbrowser::open(&s.shared.profile.web_url());
+                    let (glyph, tip) = if theme::is_dark() {
+                        (theme::icon::SUN, "Switch to the light theme")
+                    } else {
+                        (theme::icon::MOON, "Switch to the dark theme")
+                    };
+                    if widgets::icon_button(ui, glyph, "").on_hover_text(tip).clicked() {
+                        self.config.settings.theme = if theme::is_dark() { ThemePref::Light } else { ThemePref::Dark };
+                        actions.0.push(Action::ConfigChanged);
                     }
-                }
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let running = self.jobs.running_count();
-                    let label = if running > 0 { format!("Jobs ({running} running)") } else { "Jobs".into() };
-                    if ui.selectable_label(self.jobs_panel.open, label).clicked() {
+                    let label = if running > 0 {
+                        format!("{}  Jobs · {running} running", theme::icon::TASKS)
+                    } else {
+                        format!("{}  Jobs", theme::icon::TASKS)
+                    };
+                    let jobs = ui.add(
+                        egui::Button::new(label)
+                            .selected(self.jobs_panel.open)
+                            .corner_radius(egui::CornerRadius::same(9))
+                            .min_size(egui::vec2(0.0, 32.0)),
+                    );
+                    if jobs.clicked() {
                         self.jobs_panel.open = !self.jobs_panel.open;
                     }
-                    if running > 0 {
+                    if let Some(s) = self.session.as_mut() {
+                        if widgets::icon_button(ui, theme::icon::REFRESH, "").on_hover_text("Refresh now").clicked() {
+                            actions.refresh();
+                        }
+                        if s.resources_fetch.is_loading() {
+                            ui.spinner();
+                        }
+                        if let Some(e) = &s.error {
+                            ui.label(RichText::new(format!("{} refresh failed", theme::icon::WARNING)).color(theme::err()))
+                                .on_hover_text(e);
+                        }
+                        self.search_box(ui, actions);
+                    } else if self.connecting.is_some() {
                         ui.spinner();
+                        ui.label("Connecting…");
                     }
                 });
             });
         });
     }
 
+    /// Global search: guests by name, VMID, tag or IPAM address.
+    fn search_box(&mut self, ui: &mut egui::Ui, actions: &mut Actions) {
+        let Some(s) = self.session.as_ref() else { return };
+        let p = theme::p();
+        let r = ui.add(
+            egui::TextEdit::singleline(&mut self.search)
+                .hint_text(format!("{}  Search guests, IPs, tags…", theme::icon::SEARCH))
+                .desired_width(280.0)
+                .margin(egui::Margin::symmetric(10, 7)),
+        );
+        let q = self.search.trim().to_lowercase();
+        if q.is_empty() {
+            return;
+        }
+        let ipam = s.shared.ipam.lock();
+        let mut hits: Vec<(GuestKind, u64, String, String)> = s
+            .shared
+            .guests()
+            .filter_map(|g| {
+                let kind = g.kind()?;
+                let ips: Vec<String> = ipam.guest_ips(&s.shared.server_id, g.vmid).into_iter().map(|a| a.ip.clone()).collect();
+                let hay = format!("{} {} {} {}", g.vmid, g.name, g.tags, ips.join(" ")).to_lowercase();
+                hay.contains(&q).then(|| (kind, g.vmid, g.display_name(), format!("{} {} · {}", kind.label(), g.vmid, g.node)))
+            })
+            .collect();
+        drop(ipam);
+        hits.sort_by_key(|h| h.1);
+        hits.truncate(8);
+        let mut go = None;
+        egui::Area::new(egui::Id::unique("search-results"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(r.rect.left_bottom() + egui::vec2(0.0, 4.0))
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.set_width(r.rect.width().max(300.0));
+                    if hits.is_empty() {
+                        ui.label(RichText::new("No matching guests").color(p.muted));
+                    }
+                    for (kind, vmid, name, meta) in &hits {
+                        let resp = ui.add(
+                            egui::Button::new(RichText::new(format!("{name}   ")).family(theme::semibold()))
+                                .right_text(RichText::new(meta.clone()).color(p.muted).size(12.0))
+                                .frame(false)
+                                .min_size(egui::vec2(ui.available_width(), 28.0)),
+                        );
+                        if resp.clicked() {
+                            go = Some(Nav::Guest(*kind, *vmid));
+                        }
+                    }
+                    if ui.input(|i| i.key_pressed(egui::Key::Enter))
+                        && let Some((kind, vmid, ..)) = hits.first()
+                    {
+                        go = Some(Nav::Guest(*kind, *vmid));
+                    }
+                });
+            });
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.search.clear();
+        }
+        if let Some(n) = go {
+            self.search.clear();
+            actions.nav(n);
+        }
+    }
+
     fn sidebar(&mut self, ui: &mut egui::Ui, actions: &mut Actions) {
-        egui::Panel::left("nav").default_size(250.0).min_size(180.0).show(ui, |ui| {
+        let p = theme::p();
+        let frame = egui::Frame::new().fill(p.side).inner_margin(egui::Margin::symmetric(12, 14));
+        egui::Panel::left("nav").frame(frame).default_size(250.0).min_size(200.0).max_size(380.0).show(ui, |ui| {
+            // Brand
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
+                ui.painter().rect_filled(rect, egui::CornerRadius::same(8), p.accent);
+                ui.painter().text(
+                    rect.center(),
+                    egui::Align2::CENTER_CENTER,
+                    theme::icon::HARD_DRIVES,
+                    egui::FontId::proportional(17.0),
+                    p.on_accent,
+                );
+                ui.label(theme::bold("ProxmoxPanel", 15.5));
+            });
+            ui.add_space(10.0);
+            self.cluster_card(ui, actions);
+            ui.add_space(8.0);
+
             egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
                 let connected = self.session.is_some();
-                ui.add_space(4.0);
-                ui.label(RichText::new("DATACENTER").small().color(theme::MUTED));
-                for (label, nav) in [
-                    ("Dashboard", Nav::Dashboard),
-                    ("Guests", Nav::Guests),
-                    ("Storage", Nav::Storage),
-                    ("Tasks", Nav::Tasks),
-                    ("Backup · Replication · HA", Nav::Cluster),
-                    ("Users · Pools · Tenants", Nav::Access),
+                ui.spacing_mut().item_spacing.y = 2.0;
+                let group = |ui: &mut egui::Ui, text: &str| {
+                    ui.add_space(8.0);
+                    ui.label(RichText::new(format!("  {text}")).size(11.0).family(theme::semibold()).color(p.muted));
+                    ui.add_space(2.0);
+                };
+                group(ui, "DATACENTER");
+                use theme::icon as i;
+                for (glyph, label, nav) in [
+                    (i::DASHBOARD, "Dashboard", Nav::Dashboard),
+                    (i::DESKTOP, "Guests", Nav::Guests),
+                    (i::DATABASE, "Storage", Nav::Storage),
+                    (i::TASKS, "Tasks", Nav::Tasks),
+                    (i::ARCHIVE, "Backup · HA", Nav::Cluster),
+                    (i::USERS, "Users · Tenants", Nav::Access),
                 ] {
-                    let sel = self.nav == nav;
-                    if ui.add_enabled(connected, egui::Button::selectable(sel, label)).clicked() {
+                    if widgets::nav_item(ui, glyph, label, self.nav == nav, connected).clicked() {
                         actions.nav(nav);
                     }
                 }
-                ui.add_space(6.0);
-                ui.label(RichText::new("LOCAL").small().color(theme::MUTED));
-                for (label, nav) in [
-                    ("IP address management", Nav::Ipam),
-                    ("OS image catalog", Nav::Catalog),
-                    ("Servers", Nav::Servers),
-                    ("Settings & logs", Nav::Settings),
+                group(ui, "LOCAL");
+                for (glyph, label, nav) in [
+                    (i::NETWORK, "IP addresses", Nav::Ipam),
+                    (i::STACK, "OS image catalog", Nav::Catalog),
+                    (i::SERVER, "Servers", Nav::Servers),
+                    (i::GEAR, "Settings", Nav::Settings),
                 ] {
-                    if ui.selectable_label(self.nav == nav, label).clicked() {
+                    if widgets::nav_item(ui, glyph, label, self.nav == nav, true).clicked() {
                         actions.nav(nav);
                     }
                 }
-                if let Some(s) = &self.session {
-                    ui.add_space(6.0);
+                if self.session.is_some() {
+                    ui.add_space(10.0);
                     ui.separator();
-                    ui.add(egui::TextEdit::singleline(&mut self.sidebar_filter).hint_text("Filter guests…"));
-                    let filter = self.sidebar_filter.to_lowercase();
-                    let mut nodes: Vec<&Resource> = s.shared.resources.iter().filter(|r| r.rtype == "node").collect();
-                    nodes.sort_by(|a, b| a.node.cmp(&b.node));
-                    for n in nodes {
-                        let mut guests: Vec<&Resource> = s
-                            .shared
-                            .guests()
-                            .filter(|g| g.node == n.node)
-                            .filter(|g| {
-                                filter.is_empty()
-                                    || g.name.to_lowercase().contains(&filter)
-                                    || g.vmid.to_string().contains(&filter)
-                                    || g.tags.to_lowercase().contains(&filter)
-                            })
-                            .collect();
-                        guests.sort_by_key(|g| g.vmid);
-                        let header = egui::CollapsingHeader::new(RichText::new(format!("{}  ({})", n.node, guests.len())).strong())
-                            .id_salt(format!("node-{}", n.node))
-                            .default_open(true)
-                            .show(ui, |ui| {
-                                for g in guests {
-                                    let Some(kind) = g.kind() else { continue };
-                                    let sel = self.nav == Nav::Guest(kind, g.vmid);
-                                    ui.horizontal(|ui| {
-                                        widgets::status_dot(ui, if g.template { "" } else { &g.status });
-                                        let mut text = format!("{} {}", g.vmid, g.display_name());
-                                        if g.template {
-                                            text.push_str("  [template]");
-                                        }
-                                        if !g.lock.is_empty() {
-                                            text.push_str(&format!("  🔒{}", g.lock));
-                                        }
-                                        let label =
-                                            if kind == GuestKind::Lxc { RichText::new(text).italics() } else { RichText::new(text) };
-                                        if ui
-                                            .selectable_label(sel, label)
-                                            .on_hover_text(format!("{} on {}", kind.label(), g.node))
-                                            .clicked()
-                                        {
-                                            actions.nav(Nav::Guest(kind, g.vmid));
-                                        }
-                                    });
-                                }
-                            });
-                        let r = header.header_response;
-                        if r.secondary_clicked() || r.double_clicked() {
-                            actions.nav(Nav::Node(n.node.clone()));
-                        }
-                        r.on_hover_text(format!("{} — double-click to open the node view", n.status));
-                    }
+                    ui.add_space(4.0);
+                    self.guest_tree(ui, actions);
                 }
             });
         });
+    }
+
+    /// The connected cluster, with a menu to switch, open the web UI or disconnect.
+    fn cluster_card(&mut self, ui: &mut egui::Ui, actions: &mut Actions) {
+        let p = theme::p();
+        let (title, sub, color) = if let Some(s) = &self.session {
+            let quorum = if s.loaded_once { "connected" } else { "loading…" };
+            (s.shared.profile.display_name(), format!("{} · {quorum}", s.shared.client.userid()), p.ok)
+        } else if let Some(c) = &self.connecting {
+            let name = self.config.profile(&c.profile_id).map(|p| p.display_name()).unwrap_or_default();
+            (name, "connecting…".to_string(), p.warn)
+        } else {
+            ("Not connected".to_string(), "choose a server".to_string(), p.stopped)
+        };
+        let resp = egui::Frame::new()
+            .fill(p.surface2)
+            .stroke(egui::Stroke::new(1.0, p.border2))
+            .corner_radius(egui::CornerRadius::same(10))
+            .inner_margin(egui::Margin::symmetric(10, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    widgets::dot(ui, color);
+                    ui.vertical(|ui| {
+                        ui.spacing_mut().item_spacing.y = 0.0;
+                        ui.label(RichText::new(title).family(theme::semibold()));
+                        ui.label(RichText::new(sub).size(12.0).color(p.muted));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        ui.label(RichText::new(theme::icon::CARET_DOWN).color(p.muted));
+                    });
+                });
+            })
+            .response
+            .interact(egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        egui::Popup::menu(&resp).width(resp.rect.width()).show(|ui| {
+            for prof in &self.config.profiles {
+                let active = self.session.as_ref().map(|s| s.shared.server_id == prof.id).unwrap_or(false);
+                if ui.selectable_label(active, prof.display_name()).clicked() && !active {
+                    actions.0.push(Action::Connect(prof.id.clone()));
+                }
+            }
+            ui.separator();
+            if let Some(s) = &self.session {
+                if ui.button(format!("{}  Open web UI", theme::icon::EXTERNAL)).clicked() {
+                    let _ = webbrowser::open(&s.shared.profile.web_url());
+                }
+                if ui.button(format!("{}  Disconnect", theme::icon::SIGN_OUT)).clicked() {
+                    actions.0.push(Action::Disconnect);
+                }
+            }
+            if ui.button(format!("{}  Manage servers…", theme::icon::SERVER)).clicked() {
+                actions.nav(Nav::Servers);
+            }
+        });
+    }
+
+    fn guest_tree(&mut self, ui: &mut egui::Ui, actions: &mut Actions) {
+        let Some(s) = &self.session else { return };
+        let p = theme::p();
+        ui.add(
+            egui::TextEdit::singleline(&mut self.sidebar_filter)
+                .hint_text(format!("{}  Filter guests", theme::icon::FUNNEL))
+                .desired_width(f32::INFINITY)
+                .margin(egui::Margin::symmetric(8, 5)),
+        );
+        ui.add_space(4.0);
+        let filter = self.sidebar_filter.to_lowercase();
+        let mut nodes: Vec<&Resource> = s.shared.resources.iter().filter(|r| r.rtype == "node").collect();
+        nodes.sort_by(|a, b| a.node.cmp(&b.node));
+        for n in nodes {
+            let mut guests: Vec<&Resource> = s
+                .shared
+                .guests()
+                .filter(|g| g.node == n.node)
+                .filter(|g| {
+                    filter.is_empty()
+                        || g.name.to_lowercase().contains(&filter)
+                        || g.vmid.to_string().contains(&filter)
+                        || g.tags.to_lowercase().contains(&filter)
+                })
+                .collect();
+            guests.sort_by_key(|g| g.vmid);
+            let running = guests.iter().filter(|g| g.status == "running").count();
+            let collapsed = self.collapsed_nodes.contains(&n.node);
+            let width = ui.available_width();
+            let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 28.0), egui::Sense::click());
+            let sel = self.nav == Nav::Node(n.node.clone());
+            if sel {
+                ui.painter().rect_filled(rect, egui::CornerRadius::same(8), p.nav_on_bg);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(rect, egui::CornerRadius::same(8), p.surface2);
+            }
+            let caret_rect = egui::Rect::from_min_size(rect.min, egui::vec2(22.0, rect.height()));
+            let painter = ui.painter();
+            painter.text(
+                caret_rect.center(),
+                egui::Align2::CENTER_CENTER,
+                if collapsed { theme::icon::CARET_RIGHT } else { theme::icon::CARET_DOWN },
+                egui::FontId::proportional(12.0),
+                p.muted,
+            );
+            painter.circle_filled(egui::pos2(rect.left() + 28.0, rect.center().y), 3.5, theme::status_color(&n.status));
+            painter.text(
+                egui::pos2(rect.left() + 38.0, rect.center().y),
+                egui::Align2::LEFT_CENTER,
+                &n.node,
+                egui::FontId::new(13.5, theme::semibold()),
+                p.text,
+            );
+            painter.text(
+                egui::pos2(rect.right() - 8.0, rect.center().y),
+                egui::Align2::RIGHT_CENTER,
+                format!("{running} / {}", guests.len()),
+                egui::FontId::proportional(12.0),
+                p.muted,
+            );
+            let resp = resp.on_hover_text(format!("{}: open the node view", n.status));
+            if resp.clicked() {
+                let on_caret = resp.interact_pointer_pos().map(|pos| caret_rect.contains(pos)).unwrap_or(false);
+                if on_caret {
+                    if collapsed {
+                        self.collapsed_nodes.remove(&n.node);
+                    } else {
+                        self.collapsed_nodes.insert(n.node.clone());
+                    }
+                } else {
+                    actions.nav(Nav::Node(n.node.clone()));
+                }
+            }
+            if collapsed {
+                continue;
+            }
+            for g in guests {
+                let Some(kind) = g.kind() else { continue };
+                let sel = self.nav == Nav::Guest(kind, g.vmid);
+                let (rect, resp) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::click());
+                if sel {
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(7), p.nav_on_bg);
+                } else if resp.hovered() {
+                    ui.painter().rect_filled(rect, egui::CornerRadius::same(7), p.surface2);
+                }
+                let painter = ui.painter();
+                let dot = if g.template { p.stopped } else { theme::status_color(&g.status) };
+                painter.circle_filled(egui::pos2(rect.left() + 28.0, rect.center().y), 3.0, dot);
+                let id_galley = painter.layout_no_wrap(g.vmid.to_string(), egui::FontId::monospace(11.5), p.muted);
+                let id_w = id_galley.size().x;
+                painter.galley(egui::pos2(rect.left() + 38.0, rect.center().y - id_galley.size().y / 2.0), id_galley, p.muted);
+                let fg = if sel {
+                    p.nav_on_fg
+                } else if g.template {
+                    p.muted
+                } else {
+                    p.text2
+                };
+                let mut name = g.display_name();
+                if !g.lock.is_empty() {
+                    name.push_str(&format!("  {}", theme::icon::KEY));
+                }
+                let font = if sel { egui::FontId::new(13.0, theme::semibold()) } else { egui::FontId::proportional(13.0) };
+                let clip = ui.painter().with_clip_rect(rect.shrink2(egui::vec2(4.0, 0.0)));
+                clip.text(egui::pos2(rect.left() + 46.0 + id_w, rect.center().y), egui::Align2::LEFT_CENTER, name, font, fg);
+                let resp = resp
+                    .on_hover_text(format!(
+                        "{} {} on {} · {}",
+                        kind.label(),
+                        g.vmid,
+                        g.node,
+                        if g.template { "template" } else { &g.status }
+                    ))
+                    .on_hover_cursor(egui::CursorIcon::PointingHand);
+                if resp.clicked() {
+                    actions.nav(Nav::Guest(kind, g.vmid));
+                }
+            }
+            ui.add_space(4.0);
+        }
     }
 
     fn central(&mut self, ui: &mut egui::Ui, actions: &mut Actions) {
@@ -717,9 +959,9 @@ impl App {
                 let mut dismiss = None;
                 for (i, t) in self.toasts.iter().enumerate().rev().take(6) {
                     let color = match t.level {
-                        ToastLevel::Ok => theme::OK,
-                        ToastLevel::Error => theme::ERR,
-                        ToastLevel::Info => theme::INFO,
+                        ToastLevel::Ok => theme::ok(),
+                        ToastLevel::Error => theme::err(),
+                        ToastLevel::Info => theme::info(),
                     };
                     let r = egui::Frame::popup(ui.style())
                         .stroke(egui::Stroke::new(1.0, color))
@@ -767,15 +1009,17 @@ impl eframe::App for App {
         ctx.request_repaint_after(every);
 
         let mut actions = Actions::default();
+        self.sidebar(ui, &mut actions);
         self.top_bar(ui, &mut actions);
         if self.jobs_panel.open {
             let jobs = self.jobs.clone();
-            egui::Panel::bottom("jobs").resizable(true).default_size(220.0).show(ui, |ui| {
+            let frame = egui::Frame::new().fill(theme::p().side).inner_margin(egui::Margin::symmetric(16, 10));
+            egui::Panel::bottom("jobs").frame(frame).resizable(true).default_size(220.0).show(ui, |ui| {
                 self.jobs_panel.ui(ui, &jobs);
             });
         }
-        self.sidebar(ui, &mut actions);
-        egui::CentralPanel::default().show(ui, |ui| {
+        let central = egui::Frame::new().fill(theme::p().bg).inner_margin(egui::Margin { left: 28, right: 28, top: 20, bottom: 12 });
+        egui::CentralPanel::default().frame(central).show(ui, |ui| {
             self.central(ui, &mut actions);
         });
         self.totp_window(&ctx);

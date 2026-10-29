@@ -81,7 +81,7 @@ impl NodeView {
                 if let Some(Ok(n)) = self.updates.poll()
                     && *n > 0
                 {
-                    ui.label(RichText::new(format!("{n} package updates available")).color(theme::WARN));
+                    ui.label(RichText::new(format!("{n} package updates available")).color(theme::warn()));
                 }
             });
             ui.horizontal_wrapped(|ui| {
@@ -95,14 +95,14 @@ impl NodeView {
                 if ui.button("Stop all guests").clicked() {
                     self.confirm = Some(Confirm::new("Stop all", format!("Stop all guests on {node}?"), Act::StopAll).danger());
                 }
-                if ui.button(RichText::new("Reboot node").color(theme::WARN)).clicked() {
+                if ui.button(RichText::new("Reboot node").color(theme::warn())).clicked() {
                     self.confirm = Some(
                         Confirm::new("Reboot node", format!("Reboot {node}? Guests without HA will go down."), Act::Reboot)
                             .danger()
                             .require(node.clone()),
                     );
                 }
-                if ui.button(RichText::new("Shut down node").color(theme::ERR)).clicked() {
+                if ui.button(RichText::new("Shut down node").color(theme::err())).clicked() {
                     self.confirm =
                         Some(Confirm::new("Shut down node", format!("Power off {node}?"), Act::Shutdown).danger().require(node.clone()));
                 }
@@ -114,10 +114,10 @@ impl NodeView {
                 let root = st.get("rootfs").cloned().unwrap_or_default();
                 let cpuinfo = st.get("cpuinfo").cloned().unwrap_or_default();
                 egui::Grid::new("node-status").num_columns(2).spacing([12.0, 5.0]).show(ui, |ui| {
-                    ui.label(RichText::new("CPU").color(theme::MUTED));
+                    ui.label(RichText::new("CPU").color(theme::muted()));
                     widgets::usage_bar(ui, st.f("cpu") as f32, format!("{:.1}%", st.f("cpu") * 100.0), 300.0);
                     ui.end_row();
-                    ui.label(RichText::new("Memory").color(theme::MUTED));
+                    ui.label(RichText::new("Memory").color(theme::muted()));
                     widgets::usage_bar(
                         ui,
                         pct(mem.f("used"), mem.f("total")),
@@ -125,7 +125,7 @@ impl NodeView {
                         300.0,
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Swap").color(theme::MUTED));
+                    ui.label(RichText::new("Swap").color(theme::muted()));
                     widgets::usage_bar(
                         ui,
                         pct(swap.f("used"), swap.f("total")),
@@ -133,7 +133,7 @@ impl NodeView {
                         300.0,
                     );
                     ui.end_row();
-                    ui.label(RichText::new("Root FS").color(theme::MUTED));
+                    ui.label(RichText::new("Root FS").color(theme::muted()));
                     widgets::usage_bar(
                         ui,
                         pct(root.f("used"), root.f("total")),
@@ -201,9 +201,9 @@ impl NodeView {
                         ui.label(i.s("iface"));
                         ui.label(i.s("type"));
                         ui.label(if i.b("active") {
-                            RichText::new("yes").color(theme::OK)
+                            RichText::new("yes").color(theme::ok())
                         } else {
-                            RichText::new("no").color(theme::MUTED)
+                            RichText::new("no").color(theme::muted())
                         });
                         let mut addr = i.s("cidr");
                         if !i.s("cidr6").is_empty() {

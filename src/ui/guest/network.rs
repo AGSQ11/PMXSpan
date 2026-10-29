@@ -142,7 +142,7 @@ impl NetworkTab {
                     if ui.small_button("Edit").clicked() {
                         self.editing = Some(NicForm::parse(kind, k, v));
                     }
-                    if ui.small_button(RichText::new("Remove").color(theme::ERR)).clicked() {
+                    if ui.small_button(RichText::new("Remove").color(theme::err())).clicked() {
                         self.confirm_remove = Some(
                             Confirm::new(
                                 "Remove interface",

@@ -20,6 +20,9 @@ install -Dm755 "$BIN" "$PKG/usr/bin/proxmoxpanel"
 install -Dm644 "$ROOT/packaging/assets/proxmoxpanel.png" "$PKG/usr/share/icons/hicolor/256x256/apps/proxmoxpanel.png"
 install -Dm644 "$ROOT/packaging/linux/proxmoxpanel.desktop" "$PKG/usr/share/applications/proxmoxpanel.desktop"
 install -Dm644 "$ROOT/README.md" "$PKG/usr/share/doc/proxmoxpanel/README.md"
+for f in "$ROOT"/assets/fonts/*-LICENSE.txt; do
+  install -Dm644 "$f" "$PKG/usr/share/doc/proxmoxpanel/licenses/$(basename "$f")"
+done
 
 mkdir -p "$PKG/DEBIAN"
 cat > "$PKG/DEBIAN/control" <<EOF

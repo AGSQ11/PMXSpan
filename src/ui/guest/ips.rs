@@ -121,7 +121,7 @@ impl IpsTab {
             ui.label("Anti-spoofing IP filter:");
             match ipfilter {
                 Some(true) => {
-                    ui.label(RichText::new("on").color(theme::OK));
+                    ui.label(RichText::new("on").color(theme::ok()));
                     if ui.small_button("Sync").on_hover_text("Rewrite ipfilter-netN with the current addresses").clicked() {
                         self.spawn_apply(gc, IpFilter::On);
                     }
@@ -130,7 +130,7 @@ impl IpsTab {
                     }
                 }
                 Some(false) => {
-                    ui.label(RichText::new("off").color(theme::MUTED));
+                    ui.label(RichText::new("off").color(theme::muted()));
                     if ui.small_button("Turn on").clicked() {
                         self.spawn_apply(gc, IpFilter::On);
                     }
@@ -140,7 +140,7 @@ impl IpsTab {
                 }
             }
             if ipfilter == Some(true) && !fw_on {
-                ui.label(RichText::new("(not enforced: the guest firewall is disabled)").color(theme::WARN));
+                ui.label(RichText::new("(not enforced: the guest firewall is disabled)").color(theme::warn()));
             }
         });
         ui.add_space(4.0);
@@ -152,7 +152,7 @@ impl IpsTab {
         let orphans: Vec<&Assignment> = assigned.iter().filter(|a| !ifaces.contains_key(&a.iface())).collect();
         for (n, nic) in &ifaces {
             let mine: Vec<&Assignment> = assigned.iter().filter(|a| a.iface() == *n).collect();
-            egui::Frame::group(ui.style()).inner_margin(8.0).show(ui, |ui| {
+            crate::ui::theme::card_frame().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(format!("net{n}")).strong().size(15.0));
@@ -189,16 +189,16 @@ impl IpsTab {
                             ui.label(if a.is_v6() { "IPv6" } else { "IPv4" });
                             ui.label(pool_label(&a.pool_id));
                             if a.main {
-                                ui.label(RichText::new("main").color(theme::OK).strong());
+                                ui.label(RichText::new("main").color(theme::ok()).strong());
                             } else {
-                                ui.label(RichText::new("additional").color(theme::MUTED));
+                                ui.label(RichText::new("additional").color(theme::muted()));
                             }
                             ui.horizontal(|ui| {
                                 if !a.main && ui.small_button("Make main").clicked() {
                                     let (env, gr, ip, opts) = (sh.env(), g.clone(), a.ip.clone(), self.opts());
                                     sh.spawn(gc.title(&format!("Main address {ip}")), move |ctx| ipassign::make_main(env, ctx, gr, ip, opts));
                                 }
-                                if ui.small_button(RichText::new("Release").color(theme::ERR)).clicked() {
+                                if ui.small_button(RichText::new("Release").color(theme::err())).clicked() {
                                     let body = if a.main {
                                         format!("Release {} from net{n}? It is the main address; another address on net{n} becomes main, or the guest falls back to DHCP.", a.ip)
                                     } else {
@@ -216,7 +216,7 @@ impl IpsTab {
                     if !open && ui.button("＋ Assign addresses").clicked() {
                         self.assign = Some((*n, AssignForm::default()));
                     }
-                    if ui.small_button(RichText::new("Remove interface").color(theme::ERR)).clicked() {
+                    if ui.small_button(RichText::new("Remove interface").color(theme::err())).clicked() {
                         let ips: Vec<String> = mine.iter().map(|a| a.ip.clone()).collect();
                         let extra = if ips.is_empty() { String::new() } else { format!(" Its addresses {} are released.", ips.join(", ")) };
                         self.confirm = Some(Confirm::new("Remove interface", format!("Remove net{n} from the guest?{extra}"), Act::RemoveIface(*n)).danger());

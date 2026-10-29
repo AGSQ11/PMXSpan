@@ -11,7 +11,8 @@ It handles provisioning (auto-placement, create, rebuild, IP management, cloud-i
 | **Connections** | Multiple server profiles. You can log in with an API token or with a password ticket (TOTP 2FA supported, auto-renewed). TLS can verify against the OS trust store, **pin the certificate's SHA-256 fingerprint** (with a "fetch from server" button), or skip verification for labs. |
 | **Secrets** | Tokens and passwords are kept in a local vault encrypted with Argon2id + XChaCha20-Poly1305 under a master password. Logs are redacted before anything is written. |
 | **Diagnostics** | Shows the Proxmox version, cluster/quorum, node status, which storages accept each content type (`images`, `rootdir`, `iso`, `vztmpl`, `backup`, `snippets`), and the credential's effective privileges on `/`. |
-| **Dashboard** | Cluster totals, node cards (CPU/RAM/root FS), storage usage and recent task failures. |
+| **Look & feel** | Two themes, **Graphite** (dark) and **Daylight** (light), switched with the sun/moon button in the top bar or in Settings (or following the system). Sidebar with the node/guest tree, a global search for guests, VMIDs, tags and IP addresses, and cards throughout. Fonts and icons are bundled, so it looks the same on every machine. |
+| **Dashboard** | Nodes, running guests, CPU and memory at a glance; a guest table with each guest's main IP; per-node usage, recent tasks and storage usage. |
 | **Guests** | Sortable, filterable list with quick power actions, plus a navigation tree per node. |
 | **Guest detail** | Summary (live status, agent/LXC IP addresses, traffic for the billing period, RRD graphs). Hardware (CPU/memory/options/tags/notes, disk resize/move/add/detach, ISO insert/eject, boot order, raw config). Network (bridge/VLAN/rate/firewall/MAC, LXC addressing). **IP addresses** (see below). Cloud-Init. Snapshots. Backups (back up/restore/protect/delete). Firewall (options, rules, reorder, log). Guest agent (OS/filesystems, set password, run commands). Task history. Manage (password reset, migrate, clone, **rebuild**, HA, pool, template, clear lock, destroy). |
 | **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local), from an **OS catalog image**, or from an ISO, and containers from a `vztmpl` on storage or from the catalog. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. |
@@ -126,7 +127,13 @@ src/
   jobs.rs       background jobs with step logs
   rt.rs         UI <-> tokio bridge (Fetch handles)
   ui/           egui views
-tools/mock_pve.py   mock Proxmox VE API for development/demo
+assets/fonts/   bundled fonts and their licenses
+tools/mock_pve.py        mock Proxmox VE API for development/demo
+tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
 Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto round trip and fingerprint parsing.
+
+## Credits
+
+Bundled fonts: [Inter](https://rsms.me/inter/) and [JetBrains Mono](https://www.jetbrains.com/lp/mono/) (SIL Open Font License 1.1), and icons from [Phosphor](https://phosphoricons.com/) (MIT). Their licenses are in `assets/fonts/`.

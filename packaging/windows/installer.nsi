@@ -1,13 +1,13 @@
 ; ProxmoxPanel Windows installer (NSIS 3).
 ;
-; Build:  makensis -DVERSION=0.2.0 -DEXE=path\to\proxmoxpanel.exe -DOUTFILE=ProxmoxPanel-Setup.exe packaging\windows\installer.nsi
+; Build:  makensis -DVERSION=0.3.0 -DEXE=path\to\proxmoxpanel.exe -DOUTFILE=ProxmoxPanel-Setup.exe packaging\windows\installer.nsi
 ; (packaging/build-installers.sh does this for you.)
 
 Unicode true
 SetCompressor /SOLID lzma
 
 !ifndef VERSION
-  !define VERSION "0.2.0"
+  !define VERSION "0.3.0"
 !endif
 !ifndef EXE
   !define EXE "..\..\target\release\proxmoxpanel.exe"
@@ -58,6 +58,11 @@ Section "ProxmoxPanel (required)" SecMain
   SetOutPath "$INSTDIR"
   File "/oname=proxmoxpanel.exe" "${EXE}"
   File "/oname=proxmoxpanel.ico" "..\assets\proxmoxpanel.ico"
+  SetOutPath "$INSTDIR\licenses"
+  File "..\..\assets\fonts\Inter-LICENSE.txt"
+  File "..\..\assets\fonts\JetBrainsMono-LICENSE.txt"
+  File "..\..\assets\fonts\Phosphor-LICENSE.txt"
+  SetOutPath "$INSTDIR"
 
   WriteRegStr HKLM "Software\${APPNAME}" "InstallDir" "$INSTDIR"
   WriteUninstaller "$INSTDIR\uninstall.exe"
@@ -92,6 +97,8 @@ Section "Uninstall"
   Delete "$INSTDIR\proxmoxpanel.exe"
   Delete "$INSTDIR\proxmoxpanel.ico"
   Delete "$INSTDIR\uninstall.exe"
+  Delete "$INSTDIR\licenses\*-LICENSE.txt"
+  RMDir "$INSTDIR\licenses"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\${APPNAME}\${APPNAME}.lnk"
   Delete "$SMPROGRAMS\${APPNAME}\Uninstall ${APPNAME}.lnk"

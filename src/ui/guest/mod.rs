@@ -137,30 +137,25 @@ impl GuestView {
         }
 
         self.header(ui, sh, &g, &res);
-        ui.separator();
-        ui.horizontal_wrapped(|ui| {
-            let mut tabs =
-                vec![(Tab::Summary, "Summary"), (Tab::Hardware, "Hardware"), (Tab::Network, "Network"), (Tab::Ips, "IP addresses")];
-            if self.kind == GuestKind::Qemu {
-                tabs.push((Tab::CloudInit, "Cloud-Init"));
-            }
-            tabs.extend([(Tab::Snapshots, "Snapshots"), (Tab::Backups, "Backups"), (Tab::Firewall, "Firewall")]);
-            if self.kind == GuestKind::Qemu {
-                tabs.push((Tab::Agent, "Guest agent"));
-            }
-            tabs.extend([(Tab::Tasks, "Task history"), (Tab::Manage, "Manage")]);
-            for (t, label) in tabs {
-                ui.selectable_value(&mut self.tab, t, label);
-            }
-        });
-        ui.separator();
+        let mut tabs = vec![(Tab::Summary, "Summary"), (Tab::Hardware, "Hardware"), (Tab::Network, "Network"), (Tab::Ips, "IP addresses")];
+        if self.kind == GuestKind::Qemu {
+            tabs.push((Tab::CloudInit, "Cloud-Init"));
+        }
+        tabs.extend([(Tab::Snapshots, "Snapshots"), (Tab::Backups, "Backups"), (Tab::Firewall, "Firewall")]);
+        if self.kind == GuestKind::Qemu {
+            tabs.push((Tab::Agent, "Guest agent"));
+        }
+        tabs.extend([(Tab::Tasks, "Tasks"), (Tab::Manage, "Manage")]);
+        widgets::tab_bar(ui, &mut self.tab, &tabs);
+        ui.add(egui::Separator::default().spacing(0.0));
+        ui.add_space(14.0);
 
         let cfg_owned = self.config.ok().cloned();
         if let Some(Err(e)) = self.config.poll() {
             widgets::error_box(ui, &format!("Cannot read configuration: {e}"));
         }
         let gc = GCtx { sh, g: g.clone(), res: &res, config: cfg_owned.as_ref() };
-        egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
+        widgets::page(ui, "guest-tab", |ui| match self.tab {
             Tab::Summary => self.summary.ui(ui, &gc, actions),
             Tab::Hardware => self.hardware.ui(ui, &gc, actions),
             Tab::Network => self.network.ui(ui, &gc, actions),
@@ -176,80 +171,132 @@ impl GuestView {
     }
 
     fn header(&mut self, ui: &mut egui::Ui, sh: &Shared, g: &GuestRef, res: &Resource) {
+        let p = theme::p();
         ui.horizontal(|ui| {
-            widgets::status_dot(ui, &res.status);
-            ui.label(RichText::new(format!("{} {}", res.vmid, res.display_name())).heading().strong());
-            ui.label(
-                RichText::new(format!("{} on {}", if res.template { "template" } else { g.kind.label() }, g.node)).color(theme::MUTED),
-            );
-            ui.label(RichText::new(&res.status).color(theme::status_color(&res.status)));
-            if !res.lock.is_empty() {
-                ui.label(RichText::new(format!("🔒 locked ({})", res.lock)).color(theme::WARN));
-            }
-            for t in res.tag_list() {
-                egui::Frame::new().fill(theme::INFO.linear_multiply(0.25)).corner_radius(8.0).inner_margin(egui::vec2(6.0, 1.0)).show(
-                    ui,
-                    |ui| {
-                        ui.label(RichText::new(t).small());
-                    },
-                );
-            }
-        });
-        if res.template {
-            return;
-        }
-        ui.horizontal_wrapped(|ui| {
-            let running = res.status == "running";
-            let paused = res.status == "paused";
-            let mut buttons: Vec<PowerAction> = Vec::new();
-            if !running && !paused {
-                buttons.push(PowerAction::Start);
-            }
-            if running {
-                buttons.extend([PowerAction::Shutdown, PowerAction::Reboot]);
-                if g.kind == GuestKind::Qemu {
-                    buttons.push(PowerAction::Suspend);
-                }
-                buttons.push(PowerAction::Stop);
-                if g.kind == GuestKind::Qemu {
-                    buttons.push(PowerAction::Reset);
-                }
-            }
-            if paused {
-                buttons.extend([PowerAction::Resume, PowerAction::Stop]);
-            }
-            for a in buttons {
-                let destructive = matches!(a, PowerAction::Stop | PowerAction::Reset);
-                let label = if destructive { RichText::new(a.label()).color(theme::ERR) } else { RichText::new(a.label()) };
-                if ui.button(label).clicked() {
-                    if destructive && sh.settings.confirm_destructive {
-                        self.confirm_power = Some(
-                            Confirm::new(
-                                a.label(),
-                                format!("{} {} '{}'? This is like pulling the power cord.", a.label(), res.vmid, res.display_name()),
-                                a,
-                            )
-                            .danger(),
-                        );
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(42.0, 42.0), egui::Sense::hover());
+            ui.painter().rect(rect, egui::CornerRadius::same(10), p.surface, egui::Stroke::new(1.0, p.border2), egui::StrokeKind::Inside);
+            let glyph = if g.kind == GuestKind::Qemu { theme::icon::DESKTOP } else { theme::icon::CUBE };
+            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, glyph, egui::FontId::proportional(21.0), p.accent);
+            ui.add_space(4.0);
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 3.0;
+                ui.horizontal(|ui| {
+                    ui.label(theme::bold(res.display_name(), 20.0));
+                    ui.label(RichText::new(format!("{} {}", g.kind.label(), res.vmid)).monospace().color(p.muted));
+                    if res.template {
+                        widgets::pill(ui, "Template", widgets::Tone::Neutral);
                     } else {
-                        spawn_power(sh, g, res, a);
+                        widgets::status_pill(ui, &res.status);
+                    }
+                    if !res.lock.is_empty() {
+                        widgets::pill(ui, format!("{} locked: {}", theme::icon::LOCK, res.lock), widgets::Tone::Warn);
+                    }
+                    for t in res.tag_list() {
+                        widgets::pill(ui, t, widgets::Tone::Neutral);
+                    }
+                });
+                let mut facts = vec![format!("on {}", g.node)];
+                if res.status == "running" && res.uptime > 0 {
+                    facts.push(format!("up {}", crate::util::fmt_duration(res.uptime)));
+                }
+                facts.push(format!("{:.0} vCPU", res.maxcpu));
+                facts.push(crate::util::fmt_bytes(res.maxmem));
+                if !res.pool.is_empty() {
+                    facts.push(format!("pool {}", res.pool));
+                }
+                ui.label(RichText::new(facts.join("  ·  ")).size(12.5).color(p.muted));
+            });
+            if res.template {
+                return;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let running = res.status == "running";
+                let paused = res.status == "paused";
+                let mut buttons: Vec<PowerAction> = Vec::new();
+                if !running && !paused {
+                    buttons.push(PowerAction::Start);
+                }
+                if running {
+                    buttons.extend([PowerAction::Shutdown, PowerAction::Reboot]);
+                }
+                if paused {
+                    buttons.push(PowerAction::Resume);
+                }
+                let mut more: Vec<PowerAction> = Vec::new();
+                if running {
+                    if g.kind == GuestKind::Qemu {
+                        more.push(PowerAction::Suspend);
+                    }
+                    more.push(PowerAction::Stop);
+                    if g.kind == GuestKind::Qemu {
+                        more.push(PowerAction::Reset);
                     }
                 }
-            }
-            ui.separator();
-            let console = if g.kind == GuestKind::Qemu { "Console (noVNC)" } else { "Console (xterm.js)" };
-            if ui.button(console).on_hover_text("Opens the Proxmox console in your browser (log in to the web UI there if asked)").clicked()
-            {
-                let _ = webbrowser::open(&guest::console_url(&sh.client, g, &res.name));
-            }
-            if g.kind == GuestKind::Qemu
-                && running
-                && ui.button("SPICE").on_hover_text("Requires a SPICE display and virt-viewer").clicked()
-            {
-                let (c, gr) = (sh.client.clone(), g.clone());
-                sh.spawn(format!("SPICE console {}", g.vmid), move |_ctx| async move { guest::open_spice(&c, &gr).await });
-            }
+                if paused {
+                    more.push(PowerAction::Stop);
+                }
+                // Right-to-left: overflow menu first, then the main actions, then consoles.
+                if !more.is_empty() {
+                    let r = widgets::icon_button(ui, theme::icon::DOTS, "").on_hover_text("More power actions");
+                    egui::Popup::menu(&r).show(|ui| {
+                        for a in more {
+                            let destructive = matches!(a, PowerAction::Stop | PowerAction::Reset);
+                            let label = if destructive { RichText::new(a.label()).color(p.err) } else { RichText::new(a.label()) };
+                            if ui.button(label).clicked() {
+                                self.power(sh, g, res, a);
+                            }
+                        }
+                    });
+                }
+                for a in buttons.into_iter().rev() {
+                    let glyph = match a {
+                        PowerAction::Start | PowerAction::Resume => theme::icon::PLAY,
+                        PowerAction::Reboot => theme::icon::REFRESH,
+                        _ => theme::icon::POWER,
+                    };
+                    let r = if matches!(a, PowerAction::Start) {
+                        widgets::primary_button(ui, format!("{glyph}  {}", a.label()))
+                    } else {
+                        widgets::icon_button(ui, glyph, a.label())
+                    };
+                    if r.clicked() {
+                        self.power(sh, g, res, a);
+                    }
+                }
+                if g.kind == GuestKind::Qemu
+                    && running
+                    && widgets::icon_button(ui, theme::icon::DESKTOP, "SPICE")
+                        .on_hover_text("Requires a SPICE display and virt-viewer")
+                        .clicked()
+                {
+                    let (c, gr) = (sh.client.clone(), g.clone());
+                    sh.spawn(format!("SPICE console {}", g.vmid), move |_ctx| async move { guest::open_spice(&c, &gr).await });
+                }
+                if widgets::icon_button(ui, theme::icon::TERMINAL, "Console")
+                    .on_hover_text("Opens the Proxmox console in your browser (log in to the web UI there if asked)")
+                    .clicked()
+                {
+                    let _ = webbrowser::open(&guest::console_url(&sh.client, g, &res.name));
+                }
+            });
         });
+        ui.add_space(6.0);
+    }
+
+    fn power(&mut self, sh: &Shared, g: &GuestRef, res: &Resource, a: PowerAction) {
+        let destructive = matches!(a, PowerAction::Stop | PowerAction::Reset);
+        if destructive && sh.settings.confirm_destructive {
+            self.confirm_power = Some(
+                Confirm::new(
+                    a.label(),
+                    format!("{} {} '{}'? This is like pulling the power cord.", a.label(), res.vmid, res.display_name()),
+                    a,
+                )
+                .danger(),
+            );
+        } else {
+            spawn_power(sh, g, res, a);
+        }
     }
 
     fn tasks_ui(&mut self, ui: &mut egui::Ui, gc: &GCtx) {

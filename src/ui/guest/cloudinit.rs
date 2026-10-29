@@ -246,6 +246,6 @@ impl CloudInitTab {
             }
         });
         ui.add_space(6.0);
-        ui.label(RichText::new("Applying requires a reboot of the VM.").color(theme::MUTED));
+        ui.label(RichText::new("Applying requires a reboot of the VM.").color(theme::muted()));
     }
 }

@@ -107,7 +107,6 @@ impl AccessView {
                 }
             }
         }
-        widgets::heading(ui, "Users · Pools · Tenants");
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.tab, Tab::Tenant, "Tenant wizard");
             ui.selectable_value(&mut self.tab, Tab::Users, "Users & tokens");
@@ -232,7 +231,7 @@ impl AccessView {
                         if ui.small_button("Tokens").clicked() {
                             show_tokens = Some(id.clone());
                         }
-                        if id != "root@pam" && ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked() {
+                        if id != "root@pam" && ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
                             del = Some(id.clone());
                         }
                     });
@@ -279,8 +278,8 @@ impl AccessView {
                 for t in toks.iter() {
                     ui.horizontal(|ui| {
                         ui.label(format!("{user}!{}", t.s("tokenid")));
-                        ui.label(RichText::new(if t.b("privsep") { "privsep" } else { "full privileges" }).small().color(theme::MUTED));
-                        if ui.small_button(RichText::new("Revoke").color(theme::ERR)).clicked() {
+                        ui.label(RichText::new(if t.b("privsep") { "privsep" } else { "full privileges" }).small().color(theme::muted()));
+                        if ui.small_button(RichText::new("Revoke").color(theme::err())).clicked() {
                             revoke = Some(t.s("tokenid"));
                         }
                     });
@@ -316,7 +315,7 @@ impl AccessView {
                     let members: Vec<String> =
                         sh.guests().filter(|g| g.pool == id).map(|g| format!("{} {}", g.vmid, g.display_name())).collect();
                     ui.label(if members.is_empty() { p.s("comment") } else { members.join(", ") });
-                    if ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked() {
+                    if ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
                         del = Some(id.clone());
                     }
                     ui.end_row();
@@ -372,7 +371,7 @@ impl AccessView {
                     ui.label(a.s("type"));
                     ui.label(a.s("ugid"));
                     ui.label(a.s("roleid"));
-                    if ui.small_button(RichText::new("Remove").color(theme::ERR)).clicked() {
+                    if ui.small_button(RichText::new("Remove").color(theme::err())).clicked() {
                         del = Some((a.s("path"), a.s("ugid"), a.s("roleid")));
                     }
                     ui.end_row();

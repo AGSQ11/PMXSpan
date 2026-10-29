@@ -60,7 +60,6 @@ pub struct CatalogView {
 
 impl CatalogView {
     pub fn ui(&mut self, ui: &mut egui::Ui, store: &Arc<Mutex<CatalogStore>>, actions: &mut Actions) {
-        widgets::heading(ui, "OS image catalog");
         widgets::muted(
             ui,
             "Images for creating and reinstalling guests straight from a URL instead of a VM template. VM images (qcow2/raw/vmdk/ova) are \
@@ -171,8 +170,8 @@ impl CatalogView {
             if let Some(r) = self.probe.poll() {
                 ui.label("");
                 match r {
-                    Ok(s) => ui.label(RichText::new(format!("✔ reachable from this PC: {s}")).color(theme::OK)),
-                    Err(err) => ui.label(RichText::new(format!("✖ {err}")).color(theme::ERR)),
+                    Ok(s) => ui.label(RichText::new(format!("✔ reachable from this PC: {s}")).color(theme::ok())),
+                    Err(err) => ui.label(RichText::new(format!("✖ {err}")).color(theme::err())),
                 };
                 ui.end_row();
             }
