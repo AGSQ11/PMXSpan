@@ -1,5 +1,5 @@
-//! Guest provisioning, ported from the module's `CreateVM` /
-//! `CreateVmLXC` / `CreateVmQemuIso` / `CreateVmQemuClone` flow.
+//! Guest provisioning: containers from a template, VMs from a cloned
+//! template, an installer ISO or a catalog image.
 //!
 //! Every step is logged to the job; a failure after IPs were allocated
 //! releases them again, and a failure after the guest exists says so
@@ -43,8 +43,7 @@ impl Source {
 /// Keys a catalog entry's `config` may not override.
 const PROTECTED_KEYS: [&str; 6] = ["vmid", "ostemplate", "pool", "password", "cipassword", "sshkeys"];
 
-/// Applies a catalog entry's ostype and config overrides (the module's
-/// `applyLiveReinstallConfigOverrides`).
+/// Applies a catalog entry's ostype and config overrides.
 pub fn apply_catalog_overrides(p: &mut Params, entry: &CatalogEntry) {
     if !entry.ostype.is_empty() {
         p.push("ostype", catalog::normalize_ostype(&entry.virt, &entry.ostype));
@@ -450,8 +449,7 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
 
     // 2. Placement. Template clones default to the template's node so local
     //    template disks can be cloned; other nodes are handled by migrating after.
-    //    Catalog images restrict placement to nodes that can download them
-    //    (the module's resolveNodeLiveStorageCandidates).
+    //    Catalog images restrict placement to nodes that can download them.
     let content = if kind == GuestKind::Lxc { "rootdir" } else { "images" };
     let catalog_candidates = match &spec.source {
         Source::Catalog { entry } => Some(catalog_nodes(&env, &ctx, entry, spec.node.as_deref()).await?),
@@ -694,8 +692,7 @@ async fn catalog_nodes(
     Ok(out)
 }
 
-/// A VM whose boot disk is imported from a downloaded cloud image
-/// (the module's `CreateVmLiveQemu`).
+/// A VM whose boot disk is imported from a downloaded cloud image.
 #[allow(clippy::too_many_arguments)]
 async fn create_qemu_catalog(
     env: &Env,

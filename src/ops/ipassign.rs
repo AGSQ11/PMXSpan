@@ -1,6 +1,4 @@
-//! Assigning IP addresses to guests, ported from the module's IPAM interface
-//! handling (`InterfaceEdit`/`InterfaceAdd`/`InterfaceRemove`, `_interface_ipdata`,
-//! `IpSetSetup`).
+//! Assigning IP addresses to guests.
 //!
 //! Model: every guest interface (`net<N>`) holds any number of IPv4/IPv6
 //! addresses from IPAM. One address per family is the *main* address and is
@@ -220,7 +218,7 @@ pub async fn apply(env: &Env, ctx: &JobCtx, g: &GuestRef, opts: ApplyOpts, relea
     Ok(msg)
 }
 
-/// Mirrors the module's `IpSetSetup`: one `ipfilter-net<N>` ipset per
+/// Keeps one `ipfilter-net<N>` ipset per
 /// interface listing every assigned address. A family without addresses gets
 /// a loopback placeholder so it is blocked rather than unrestricted; SLAAC
 /// (`ip6=auto`) needs the whole v6 space allowed.
@@ -379,7 +377,7 @@ pub struct NewInterface {
     pub firewall: bool,
 }
 
-/// Adds `net<N>` with addresses from IPAM (the module's `InterfaceAdd`).
+/// Adds `net<N>` with addresses from IPAM.
 pub async fn add_interface(env: Env, ctx: JobCtx, g: GuestRef, spec: NewInterface, opts: ApplyOpts) -> anyhow::Result<String> {
     let client = &env.client;
     let cfg = guest::config(client, &g).await?;
@@ -450,7 +448,7 @@ pub async fn add_interface(env: Env, ctx: JobCtx, g: GuestRef, spec: NewInterfac
     Ok(format!("net{n} added{}; {m}", if allocated.is_empty() { String::new() } else { format!(" with {}", allocated.join(", ")) }))
 }
 
-/// Removes `net<N>` and releases its addresses (the module's `InterfaceRemove`).
+/// Removes `net<N>` and releases its addresses.
 pub async fn remove_interface(env: Env, ctx: JobCtx, g: GuestRef, n: u32) -> anyhow::Result<String> {
     let client = &env.client;
     let mut del = vec![format!("net{n}")];
@@ -471,8 +469,8 @@ pub async fn remove_interface(env: Env, ctx: JobCtx, g: GuestRef, n: u32) -> any
     Ok(format!("net{n} removed"))
 }
 
-/// Records the static addresses already configured on the guest into IPAM
-/// (the module's adoption of existing guests).
+/// Records the static addresses already configured on the guest into IPAM,
+/// so guests created elsewhere can be managed here.
 pub async fn adopt(env: Env, ctx: JobCtx, g: GuestRef) -> anyhow::Result<String> {
     let cfg = guest::config(&env.client, &g).await?;
     let name = cfg.get("name").or_else(|| cfg.get("hostname")).map(value_str).unwrap_or_default();

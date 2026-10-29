@@ -187,8 +187,8 @@ impl HardwareTab {
                 ui.end_row();
             }
             for (k, v) in cfg.iter().filter(|(k, _)| k.starts_with("unused")) {
-                ui.label(RichText::new(k).color(theme::MUTED));
-                ui.label(RichText::new(value_str(v)).monospace().color(theme::MUTED));
+                ui.label(RichText::new(k).color(theme::muted()));
+                ui.label(RichText::new(value_str(v)).monospace().color(theme::muted()));
                 ui.label("");
                 ui.label("");
                 ui.end_row();
@@ -292,7 +292,7 @@ impl HardwareTab {
                     }
                     let v = value_str(&cfg[k]);
                     let v = if k == "cipassword" { "********".to_string() } else { v };
-                    ui.label(RichText::new(k).monospace().color(theme::MUTED));
+                    ui.label(RichText::new(k).monospace().color(theme::muted()));
                     ui.label(RichText::new(v).monospace());
                     ui.end_row();
                 }

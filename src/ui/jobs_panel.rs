@@ -15,7 +15,7 @@ impl JobsPanel {
     pub fn ui(&mut self, ui: &mut egui::Ui, jobs: &Jobs) {
         let list = jobs.snapshot();
         ui.horizontal(|ui| {
-            ui.label(RichText::new("Jobs").strong());
+            ui.label(theme::bold("Jobs", 14.0));
             if ui.small_button("Clear finished").clicked() {
                 jobs.clear_finished();
                 self.selected = None;
@@ -41,9 +41,9 @@ impl JobsPanel {
                     for job in list.iter().rev() {
                         let st = job.state.lock();
                         let (icon, color) = match st.status {
-                            JobStatus::Running => ("⏳", theme::INFO),
-                            JobStatus::Done => ("✔", theme::OK),
-                            JobStatus::Failed => ("✖", theme::ERR),
+                            JobStatus::Running => (theme::icon::CLOCK, theme::info()),
+                            JobStatus::Done => (theme::icon::CHECK, theme::ok()),
+                            JobStatus::Failed => (theme::icon::CLOSE, theme::err()),
                         };
                         let text = RichText::new(format!("{icon} {}  {}", job.started.format("%H:%M:%S"), job.title)).color(color);
                         if ui.selectable_label(self.selected == Some(job.id), text).clicked() {
@@ -62,12 +62,12 @@ impl JobsPanel {
                 ui.vertical(|ui| {
                     let Some(job) = list.iter().find(|j| Some(j.id) == self.selected) else { return };
                     let st = job.state.lock();
-                    ui.label(RichText::new(&job.title).strong());
+                    ui.label(theme::bold(&job.title, 14.0));
                     for l in &st.lines {
                         let color = match l.level {
                             Level::Info => ui.visuals().text_color(),
-                            Level::Warn => theme::WARN,
-                            Level::Error => theme::ERR,
+                            Level::Warn => theme::warn(),
+                            Level::Error => theme::err(),
                         };
                         ui.label(RichText::new(format!("{}  {}", l.at.format("%H:%M:%S"), l.text)).monospace().size(12.0).color(color));
                     }

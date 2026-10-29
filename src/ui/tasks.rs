@@ -25,7 +25,6 @@ impl TasksView {
             });
         }
         ui.horizontal(|ui| {
-            widgets::heading(ui, "Tasks");
             ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("filter by node, user, type, VMID…"));
             ui.checkbox(&mut self.errors_only, "errors only");
             ui.checkbox(&mut self.running_only, "running only");
@@ -55,11 +54,11 @@ pub fn task_table(ui: &mut egui::Ui, sh: &Shared, tasks: &[TaskInfo], id: &str) 
     }
     for t in tasks {
         let (icon, color) = if t.running() {
-            ("⏳", theme::INFO)
+            ("⏳", theme::info())
         } else if t.ok() {
-            ("✔", theme::OK)
+            ("✔", theme::ok())
         } else {
-            ("✖", theme::ERR)
+            ("✖", theme::err())
         };
         let header = RichText::new(format!(
             "{icon}  {}   {}   {}   {}   {}",
@@ -95,8 +94,8 @@ fn task_log(ui: &mut egui::Ui, sh: &Shared, t: &TaskInfo) {
         });
     }
     ui.horizontal(|ui| {
-        ui.label(RichText::new(&t.upid).monospace().small().color(theme::MUTED));
-        if t.running() && ui.small_button(RichText::new("Stop task").color(theme::ERR)).clicked() {
+        ui.label(RichText::new(&t.upid).monospace().small().color(theme::muted()));
+        if t.running() && ui.small_button(RichText::new("Stop task").color(theme::err())).clicked() {
             let (c, node, upid) = (sh.client.clone(), t.node.clone(), t.upid.clone());
             sh.spawn(format!("Stop task {}", t.describe()), move |_ctx| async move {
                 c.delete(&format!("/nodes/{node}/tasks/{}", urlencoding::encode(&upid)), &Params::new()).await?;

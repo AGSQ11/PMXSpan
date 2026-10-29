@@ -1,5 +1,4 @@
-//! Least-privilege tenant setup, ported from the module's Proxmox user / pool
-//! lifecycle (`class.pveuser.php`): a dedicated pool, a `@pve` user, and an
+//! Least-privilege tenant setup: a dedicated pool, a `@pve` user, and an
 //! ACL granting a role on `/pool/<pool>` only - never cluster-wide.
 
 use crate::api::{Params, PveClient};

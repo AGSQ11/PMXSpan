@@ -112,7 +112,7 @@ impl SnapshotsTab {
                                 .danger(),
                             );
                         }
-                        if ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked() {
+                        if ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
                             pending = Some(Confirm::new(
                                 "Delete snapshot",
                                 format!("Delete snapshot '{}'?", s.name),

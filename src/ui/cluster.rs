@@ -94,7 +94,6 @@ impl ClusterView {
                 Ok(title)
             });
         }
-        widgets::heading(ui, "Backup · Replication · HA");
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.tab, Tab::Backup, "Backup jobs");
             ui.selectable_value(&mut self.tab, Tab::Replication, "Replication");
@@ -122,7 +121,7 @@ impl ClusterView {
                 sh.resources.iter().filter(|r| r.rtype == "storage" && r.has_content("backup")).map(|r| r.storage.clone()).collect();
             storages.sort();
             storages.dedup();
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            crate::ui::theme::card_frame().inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
                 egui::Grid::new("bj-form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
                     ui.label("Schedule");
                     ui.vertical(|ui| {
@@ -259,7 +258,7 @@ impl ClusterView {
                         if ui.small_button("Run now").clicked() {
                             run = Some(j.clone());
                         }
-                        if ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked() {
+                        if ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
                             del = Some(id.clone());
                         }
                     });
@@ -361,7 +360,7 @@ impl ClusterView {
                     ui.label(j.s("source"));
                     ui.label(j.s("target"));
                     ui.label(j.s("schedule"));
-                    if ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked() {
+                    if ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
                         del = Some(j.s("id"));
                     }
                     ui.end_row();
@@ -392,7 +391,7 @@ impl ClusterView {
                 ui.label(format!("{}: {}", s.s("type"), s.s("status")));
             }
             for s in st.iter().filter(|s| s.s("type") == "lrm") {
-                ui.label(RichText::new(format!("{} — {}", s.s("node"), s.s("status"))).small().color(theme::MUTED));
+                ui.label(RichText::new(format!("{} — {}", s.s("node"), s.s("status"))).small().color(theme::muted()));
             }
         }
         ui.add_space(4.0);
@@ -456,7 +455,7 @@ impl ClusterView {
                     });
                     ui.label(r.s("group"));
                     ui.label(format!("{} / {}", r.s("max_restart"), r.s("max_relocate")));
-                    if ui.small_button(RichText::new("Remove").color(theme::ERR)).clicked() {
+                    if ui.small_button(RichText::new("Remove").color(theme::err())).clicked() {
                         del = Some(sid.clone());
                     }
                     ui.end_row();

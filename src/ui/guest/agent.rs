@@ -43,10 +43,10 @@ impl AgentTab {
             widgets::section(ui, "Agent");
             match self.ping.poll() {
                 Some(Ok(())) => {
-                    ui.label(RichText::new("responding").color(theme::OK));
+                    ui.label(RichText::new("responding").color(theme::ok()));
                 }
                 Some(Err(e)) => {
-                    ui.label(RichText::new("not responding").color(theme::ERR)).on_hover_text(e.as_str());
+                    ui.label(RichText::new("not responding").color(theme::err())).on_hover_text(e.as_str());
                 }
                 None => {
                     ui.spinner();
@@ -132,7 +132,7 @@ impl AgentTab {
                     for (k, label) in [("out-data", "stdout"), ("err-data", "stderr")] {
                         let t = v.s(k);
                         if !t.is_empty() {
-                            ui.label(RichText::new(label).color(theme::MUTED));
+                            ui.label(RichText::new(label).color(theme::muted()));
                             let mut t = t;
                             ui.add(egui::TextEdit::multiline(&mut t).font(egui::TextStyle::Monospace).desired_width(f32::INFINITY));
                         }

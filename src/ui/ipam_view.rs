@@ -21,7 +21,6 @@ pub struct IpamView {
 
 impl IpamView {
     pub fn ui(&mut self, ui: &mut egui::Ui, db: &Arc<Mutex<IpamDb>>, config: &AppConfig, shared: Option<&Shared>, actions: &mut Actions) {
-        widgets::heading(ui, "IP address management");
         widgets::muted(
             ui,
             "Pools used by the create wizard and rebuilds. An explicitly requested IP is assigned exactly or the operation fails — never silently replaced.",
@@ -91,7 +90,7 @@ impl IpamView {
                                 Err(e) => actions.toast_err(format!("{e:#}")),
                             }
                         }
-                        if ui.button(RichText::new("Delete pool").color(theme::ERR)).clicked() {
+                        if ui.button(RichText::new("Delete pool").color(theme::err())).clicked() {
                             self.confirm_delete = Some(
                                 Confirm::new(
                                     "Delete pool",
@@ -157,7 +156,7 @@ impl IpamView {
                                     }
                                 }
                                 None => {
-                                    ui.label(RichText::new("reserved").color(theme::WARN));
+                                    ui.label(RichText::new("reserved").color(theme::warn()));
                                 }
                             }
                             if a.vmid.is_some() {
@@ -233,6 +232,6 @@ fn pool_form(ui: &mut egui::Ui, p: &mut Pool, config: &AppConfig) {
     if let Err(e) = p.validate()
         && !p.cidr.is_empty()
     {
-        ui.label(RichText::new(format!("{e:#}")).color(theme::WARN));
+        ui.label(RichText::new(format!("{e:#}")).color(theme::warn()));
     }
 }

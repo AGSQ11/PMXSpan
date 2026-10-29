@@ -1,9 +1,9 @@
 [package]
 name = "proxmox-panel"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
-description = "Standalone desktop manager for Proxmox VE clusters (port of the proxmoxopen HostBill module)"
+description = "Standalone desktop manager for Proxmox VE clusters"
 readme = "README.md"
 publish = false
 

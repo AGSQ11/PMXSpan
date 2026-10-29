@@ -1,5 +1,4 @@
-//! Node + storage auto-placement, ported from the module's
-//! `CreateVmSelectNode` / `CreateVMSelectNodeStorage`.
+//! Node + storage auto-placement.
 //!
 //! Nodes without enough free memory are skipped, then each remaining node's
 //! storages are checked for the required content type and free space. The

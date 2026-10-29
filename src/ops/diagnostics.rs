@@ -1,5 +1,4 @@
-//! Connection diagnostics, ported from the module's `testConnection()`:
-//! not just "did login work" but cluster health, storage capability coverage
+//! Connection diagnostics: not just "did login work" but cluster health, storage capability coverage
 //! and the effective permissions of the credential being used.
 
 use crate::api::{Params, PveClient};

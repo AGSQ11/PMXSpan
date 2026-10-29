@@ -1,5 +1,5 @@
 //! Local OS image catalog: the images offered by "create from catalog" and
-//! "reinstall from catalog". Accepts the HostBill module's catalog JSON as-is.
+//! "reinstall from catalog".
 
 use super::widgets::{self, Confirm};
 use super::{Actions, theme};
@@ -60,12 +60,11 @@ pub struct CatalogView {
 
 impl CatalogView {
     pub fn ui(&mut self, ui: &mut egui::Ui, store: &Arc<Mutex<CatalogStore>>, actions: &mut Actions) {
-        widgets::heading(ui, "OS image catalog");
         widgets::muted(
             ui,
             "Images for creating and reinstalling guests straight from a URL instead of a VM template. VM images (qcow2/raw/vmdk/ova) are \
              downloaded to an `import` storage and imported as the boot disk; container templates go to a `vztmpl` storage. \
-             The module's catalog JSON can be pasted in unchanged.",
+             Catalogs can be imported and exported as JSON.",
         );
         if let Some(id) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_delete) {
             match store.lock().remove(&id) {
@@ -171,8 +170,8 @@ impl CatalogView {
             if let Some(r) = self.probe.poll() {
                 ui.label("");
                 match r {
-                    Ok(s) => ui.label(RichText::new(format!("✔ reachable from this PC: {s}")).color(theme::OK)),
-                    Err(err) => ui.label(RichText::new(format!("✖ {err}")).color(theme::ERR)),
+                    Ok(s) => ui.label(RichText::new(format!("✔ reachable from this PC: {s}")).color(theme::ok())),
+                    Err(err) => ui.label(RichText::new(format!("✖ {err}")).color(theme::err())),
                 };
                 ui.end_row();
             }

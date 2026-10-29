@@ -56,7 +56,6 @@ impl StorageView {
         }
 
         ui.horizontal(|ui| {
-            widgets::heading(ui, "Storage");
             ui.label("Node");
             widgets::combo(ui, "st-node", &mut self.node, &nodes, 140.0);
         });
@@ -67,19 +66,19 @@ impl StorageView {
                 widgets::fetch_ui(ui, &mut self.storages, |ui, list| {
                     for s in list.iter() {
                         let sel = self.selected.as_deref() == Some(s.storage.as_str());
-                        let resp = egui::Frame::group(ui.style()).show(ui, |ui| {
+                        let resp = crate::ui::theme::card_frame().inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
                             ui.set_width(280.0);
                             ui.horizontal(|ui| {
                                 widgets::status_dot(ui, if s.usable() { "running" } else { "error" });
                                 ui.label(RichText::new(&s.storage).strong().color(if sel {
-                                    theme::ACCENT
+                                    theme::accent()
                                 } else {
                                     ui.visuals().text_color()
                                 }));
                                 ui.label(
                                     RichText::new(format!("{}{}", s.stype, if s.shared { ", shared" } else { "" }))
                                         .small()
-                                        .color(theme::MUTED),
+                                        .color(theme::muted()),
                                 );
                             });
                             ui.label(RichText::new(&s.content).small());
@@ -263,7 +262,7 @@ impl StorageView {
                             // Guest disks are managed from the guest.
                             if !matches!(i.content.as_str(), "images" | "rootdir")
                                 && !i.protected
-                                && ui.small_button(RichText::new("Delete").color(theme::ERR)).clicked()
+                                && ui.small_button(RichText::new("Delete").color(theme::err())).clicked()
                             {
                                 del = Some(i.volid.clone());
                             }
@@ -295,7 +294,7 @@ impl StorageView {
                     for a in list.iter().filter(|a| {
                         f.is_empty() || a.s("template").to_lowercase().contains(&f) || a.s("headline").to_lowercase().contains(&f)
                     }) {
-                        ui.label(RichText::new(a.s("section")).small().color(theme::MUTED));
+                        ui.label(RichText::new(a.s("section")).small().color(theme::muted()));
                         ui.label(a.s("template"));
                         ui.label(a.s("headline"));
                         if ui.small_button("Download").clicked() {

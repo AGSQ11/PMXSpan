@@ -1,5 +1,4 @@
-//! OS image catalog, ported from the module's "Live Reinstall Catalog"
-//! (`class.livereinstallcatalog.php` + the download half of `class.rebuild.php`).
+//! OS image catalog.
 //!
 //! A catalog entry points at a cloud image (QEMU: qcow2/raw/vmdk/ova) or a
 //! container template (LXC: tar.zst/xz/gz). Creating or reinstalling a guest
@@ -11,8 +10,8 @@
 //! The downloaded artifact is always removed afterwards. Downloads try the
 //! configured main storage, then the fallback; a stalled or failing storage
 //! moves on to the next candidate, while a broken URL fails immediately.
-//! The JSON format is the module's, so an existing HostBill catalog can be
-//! pasted in unchanged.
+//! Catalogs are plain JSON (an array of entries, or `{"entries": [...]}`), so
+//! they can be shared and pasted in unchanged.
 
 use crate::api::types::{NodeStorage, Upid};
 use crate::api::{Params, PveClient};
@@ -52,7 +51,7 @@ pub struct CatalogEntry {
 
 pub const QEMU_OSTYPES: [&str; 11] = ["l26", "l24", "win11", "win10", "win8", "win7", "wvista", "wxp", "w2k", "solaris", "other"];
 
-/// Lowercase, `[a-z0-9._-]`, dashes for anything else (the module's `normalizeLiveReinstallSourceId`).
+/// Lowercase, `[a-z0-9._-]`, dashes for anything else.
 pub fn normalize_id(v: &str) -> String {
     let mut out = String::new();
     let mut dash = false;
@@ -68,7 +67,7 @@ pub fn normalize_id(v: &str) -> String {
     out.trim_matches('-').to_string()
 }
 
-/// QEMU ostype from free text, falling back like the module (`win*` -> win10, else l26).
+/// QEMU ostype from free text, falling back to `win10` for `win*` and `l26` otherwise.
 pub fn normalize_ostype(virt: &str, ostype: &str) -> String {
     let o = ostype.trim().to_lowercase();
     if virt == "lxc" {
@@ -102,7 +101,7 @@ impl CatalogEntry {
         self.virt == "lxc"
     }
 
-    /// Validates and normalizes one entry, with the module's rules and messages.
+    /// Validates and normalizes one entry.
     pub fn from_value(v: &Value, index: usize) -> anyhow::Result<Self> {
         let n = index + 1;
         let obj = v.as_object().ok_or_else(|| anyhow!("catalog entry #{n} must be an object"))?;
@@ -213,8 +212,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Unique artifact filename, so concurrent jobs never clobber each other
-    /// (the module's `buildLiveReinstallFilename`).
+    /// Unique artifact filename, so concurrent jobs never clobber each other.
     pub fn artifact_filename(&self, vmid: u64, token: &str) -> String {
         let ext = self.extension();
         let base = url_path(&self.url).rsplit('/').next().unwrap_or("").to_string();
@@ -245,7 +243,7 @@ fn url_path(url: &str) -> &str {
     path.split(['?', '#']).next().unwrap_or("")
 }
 
-/// Parses a catalog in the module's format: a JSON array, or `{"entries": [...]}`.
+/// Parses a catalog: a JSON array, or `{"entries": [...]}`.
 pub fn parse_catalog(text: &str) -> anyhow::Result<Vec<CatalogEntry>> {
     let v: Value = serde_json::from_str(text.trim()).context("the catalog must be JSON")?;
     let list = match &v {
@@ -375,8 +373,8 @@ pub fn configured_storages(profile: &ServerProfile, lxc: bool) -> Vec<String> {
 }
 
 /// Usable download storages on one node, in try order. With storages
-/// configured on the server profile only those are used (main, fallback),
-/// exactly like the module; otherwise any active storage carrying the needed
+/// configured on the server profile only those are used (main, fallback);
+/// otherwise any active storage carrying the needed
 /// content, most free space first. Each must hold the image with 20% headroom
 /// (a nearly-full `local` on the root FS must never be picked).
 pub fn pick_candidates(storages: &[NodeStorage], configured: &[String], content: &str, size: u64) -> Vec<NodeStorage> {
@@ -438,7 +436,7 @@ enum Failure {
     Storage(String),
 }
 
-/// The module's `classifyLiveReinstallDownloadError`, on exit status + task log.
+/// Classifies a failed download from its exit status and task log.
 fn classify(text: &str) -> &'static str {
     let hay = text.to_lowercase();
     for n in ["404 not found", "404:", "410 gone", "403 forbidden", "unauthorized", "401"] {
@@ -544,7 +542,7 @@ async fn download_to(
     };
     let node_of = Upid::parse(&upid).map(|u| u.node).unwrap_or_else(|| node.to_string());
     // Stall detection driven by the task's own log, never by polling the
-    // (possibly hung) storage (the module's waitForLiveDownloadTask).
+    // (possibly hung) storage.
     let stall = Duration::from_secs(settings.download_stall_secs.max(30));
     let max_wait = Duration::from_secs(settings.download_max_wait_secs.max(60));
     let started = Instant::now();

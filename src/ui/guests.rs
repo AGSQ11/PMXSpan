@@ -36,12 +36,6 @@ impl GuestsView {
             let c = sh.client.clone();
             sh.spawn(format!("{} {} {}", a.label(), g.kind.label(), g.vmid), move |ctx| async move { guest::power(&c, &ctx, &g, a).await });
         }
-        ui.horizontal(|ui| {
-            widgets::heading(ui, "Guests");
-            if ui.button("＋ Create").clicked() {
-                actions.0.push(super::Action::OpenCreate(Box::default()));
-            }
-        });
         ui.horizontal_wrapped(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("Search name, VMID, tag, IP pool…").desired_width(240.0));
             egui::ComboBox::from_id_salt("g-kind").selected_text(self.kind.map(|k| k.label()).unwrap_or("All types")).show_ui(ui, |ui| {
@@ -87,111 +81,129 @@ impl GuestsView {
             if self.desc { o.reverse() } else { o }
         });
         widgets::muted(ui, format!("{} guests", rows.len()));
-        egui::ScrollArea::both().auto_shrink([false, false]).show(ui, |ui| {
-            egui::Grid::new("guests").striped(true).num_columns(10).spacing([12.0, 6.0]).show(ui, |ui| {
-                for (label, s) in [
-                    ("VMID", Some(SortBy::Vmid)),
-                    ("Name", Some(SortBy::Name)),
-                    ("Type", None),
-                    ("Node", Some(SortBy::Node)),
-                    ("Status", Some(SortBy::Status)),
-                    ("CPU", Some(SortBy::Cpu)),
-                    ("Memory", Some(SortBy::Mem)),
-                    ("Disk", None),
-                    ("Uptime", None),
-                    ("Actions", None),
-                ] {
-                    match s {
-                        Some(s) => {
-                            let arrow = if self.sort == s { if self.desc { " ▼" } else { " ▲" } } else { "" };
-                            if ui.button(RichText::new(format!("{label}{arrow}")).strong()).clicked() {
-                                if self.sort == s {
-                                    self.desc = !self.desc;
-                                } else {
-                                    self.sort = s;
-                                    self.desc = false;
+        ui.add_space(4.0);
+        widgets::card(ui, |ui| {
+            egui::ScrollArea::both().auto_shrink([false, true]).show(ui, |ui| {
+                ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Extend);
+                egui::Grid::new("guests").striped(true).num_columns(10).spacing([12.0, 6.0]).show(ui, |ui| {
+                    for (label, s) in [
+                        ("VMID", Some(SortBy::Vmid)),
+                        ("Name", Some(SortBy::Name)),
+                        ("Type", None),
+                        ("Node", Some(SortBy::Node)),
+                        ("Status", Some(SortBy::Status)),
+                        ("CPU", Some(SortBy::Cpu)),
+                        ("Memory", Some(SortBy::Mem)),
+                        ("Disk", None),
+                        ("Uptime", None),
+                        ("Actions", None),
+                    ] {
+                        match s {
+                            Some(s) => {
+                                let arrow = if self.sort == s { if self.desc { " ▼" } else { " ▲" } } else { "" };
+                                if ui
+                                    .add(
+                                        egui::Button::new(
+                                            RichText::new(format!("{label}{arrow}"))
+                                                .size(12.0)
+                                                .family(theme::semibold())
+                                                .color(theme::muted()),
+                                        )
+                                        .frame(false),
+                                    )
+                                    .clicked()
+                                {
+                                    if self.sort == s {
+                                        self.desc = !self.desc;
+                                    } else {
+                                        self.sort = s;
+                                        self.desc = false;
+                                    }
                                 }
                             }
-                        }
-                        None => {
-                            ui.label(RichText::new(label).strong());
+                            None => {
+                                ui.label(RichText::new(label).size(12.0).family(theme::semibold()).color(theme::muted()));
+                            }
                         }
                     }
-                }
-                ui.end_row();
-                for g in rows {
-                    let Some(kind) = g.kind() else { continue };
-                    if ui.link(g.vmid.to_string()).clicked() {
-                        actions.nav(Nav::Guest(kind, g.vmid));
-                    }
-                    ui.vertical(|ui| {
-                        if ui.link(g.display_name()).clicked() {
+                    ui.end_row();
+                    for g in rows {
+                        let Some(kind) = g.kind() else { continue };
+                        if ui.link(g.vmid.to_string()).clicked() {
                             actions.nav(Nav::Guest(kind, g.vmid));
                         }
-                        let tags = g.tag_list();
-                        if !tags.is_empty() {
-                            ui.label(RichText::new(tags.join(" · ")).small().color(theme::MUTED));
-                        }
-                    });
-                    ui.label(if g.template { format!("{} template", kind.label()) } else { kind.label().to_string() });
-                    ui.label(&g.node);
-                    ui.horizontal(|ui| {
-                        widgets::status_dot(ui, &g.status);
-                        ui.label(&g.status);
-                        if !g.lock.is_empty() {
-                            ui.label(RichText::new(format!("🔒 {}", g.lock)).color(theme::WARN));
-                        }
-                        if !g.hastate.is_empty() {
-                            ui.label(RichText::new(format!("HA {}", g.hastate)).small().color(theme::INFO));
-                        }
-                    });
-                    if g.status == "running" {
-                        widgets::usage_bar(ui, (g.cpu as f32).min(1.0), format!("{:.0}% of {:.0}", g.cpu * 100.0, g.maxcpu), 110.0);
-                        widgets::usage_bar(ui, pct(g.mem, g.maxmem), format!("{} / {}", fmt_bytes(g.mem), fmt_bytes(g.maxmem)), 150.0);
-                    } else {
-                        ui.label(format!("{:.0} cores", g.maxcpu));
-                        ui.label(fmt_bytes(g.maxmem));
-                    }
-                    ui.label(fmt_bytes(g.maxdisk));
-                    ui.label(fmt_duration(g.uptime));
-                    ui.horizontal(|ui| {
-                        if g.template {
-                            if ui.small_button("Deploy").on_hover_text("Create a new guest from this template").clicked() {
-                                actions.0.push(super::Action::OpenCreate(Box::new(super::create::Prefill::from_template(g))));
+                        ui.vertical(|ui| {
+                            if ui.link(g.display_name()).clicked() {
+                                actions.nav(Nav::Guest(kind, g.vmid));
                             }
-                            return;
+                            let tags = g.tag_list();
+                            if !tags.is_empty() {
+                                ui.label(RichText::new(tags.join(" · ")).small().color(theme::muted()));
+                            }
+                        });
+                        ui.label(if g.template { format!("{} template", kind.label()) } else { kind.label().to_string() });
+                        ui.label(&g.node);
+                        ui.horizontal(|ui| {
+                            widgets::status_dot(ui, &g.status);
+                            ui.label(&g.status);
+                            if !g.lock.is_empty() {
+                                ui.label(RichText::new(format!("🔒 {}", g.lock)).color(theme::warn()));
+                            }
+                            if !g.hastate.is_empty() {
+                                ui.label(RichText::new(format!("HA {}", g.hastate)).small().color(theme::info()));
+                            }
+                        });
+                        if g.status == "running" {
+                            widgets::usage_bar(ui, (g.cpu as f32).min(1.0), format!("{:.0}% of {:.0}", g.cpu * 100.0, g.maxcpu), 110.0);
+                            widgets::usage_bar(ui, pct(g.mem, g.maxmem), format!("{} / {}", fmt_bytes(g.mem), fmt_bytes(g.maxmem)), 150.0);
+                        } else {
+                            ui.label(format!("{:.0} cores", g.maxcpu));
+                            ui.label(fmt_bytes(g.maxmem));
                         }
-                        let gr = GuestRef { node: g.node.clone(), kind, vmid: g.vmid };
-                        let running = g.status == "running";
-                        let actions_list: &[PowerAction] =
-                            if running { &[PowerAction::Shutdown, PowerAction::Reboot, PowerAction::Stop] } else { &[PowerAction::Start] };
-                        for a in actions_list {
-                            if ui.small_button(a.label()).clicked() {
-                                let destructive = matches!(a, PowerAction::Stop | PowerAction::Reset);
-                                if destructive && sh.settings.confirm_destructive {
-                                    self.confirm = Some(
-                                        Confirm::new(
-                                            a.label(),
-                                            format!("{} {} '{}'? Unsaved guest data may be lost.", a.label(), g.vmid, g.display_name()),
-                                            (gr.clone(), *a),
-                                        )
-                                        .danger(),
-                                    );
-                                } else {
-                                    let (c, gr, a) = (sh.client.clone(), gr.clone(), *a);
-                                    sh.spawn(format!("{} {} {}", a.label(), kind.label(), g.vmid), move |ctx| async move {
-                                        guest::power(&c, &ctx, &gr, a).await
-                                    });
+                        ui.label(fmt_bytes(g.maxdisk));
+                        ui.label(fmt_duration(g.uptime));
+                        ui.horizontal(|ui| {
+                            if g.template {
+                                if ui.small_button("Deploy").on_hover_text("Create a new guest from this template").clicked() {
+                                    actions.0.push(super::Action::OpenCreate(Box::new(super::create::Prefill::from_template(g))));
+                                }
+                                return;
+                            }
+                            let gr = GuestRef { node: g.node.clone(), kind, vmid: g.vmid };
+                            let running = g.status == "running";
+                            let actions_list: &[PowerAction] = if running {
+                                &[PowerAction::Shutdown, PowerAction::Reboot, PowerAction::Stop]
+                            } else {
+                                &[PowerAction::Start]
+                            };
+                            for a in actions_list {
+                                if ui.small_button(a.label()).clicked() {
+                                    let destructive = matches!(a, PowerAction::Stop | PowerAction::Reset);
+                                    if destructive && sh.settings.confirm_destructive {
+                                        self.confirm = Some(
+                                            Confirm::new(
+                                                a.label(),
+                                                format!("{} {} '{}'? Unsaved guest data may be lost.", a.label(), g.vmid, g.display_name()),
+                                                (gr.clone(), *a),
+                                            )
+                                            .danger(),
+                                        );
+                                    } else {
+                                        let (c, gr, a) = (sh.client.clone(), gr.clone(), *a);
+                                        sh.spawn(format!("{} {} {}", a.label(), kind.label(), g.vmid), move |ctx| async move {
+                                            guest::power(&c, &ctx, &gr, a).await
+                                        });
+                                    }
                                 }
                             }
-                        }
-                        if ui.small_button("Console").clicked() {
-                            let _ = webbrowser::open(&guest::console_url(&sh.client, &gr, &g.name));
-                        }
-                    });
-                    ui.end_row();
-                }
-            });
+                            if ui.small_button("Console").clicked() {
+                                let _ = webbrowser::open(&guest::console_url(&sh.client, &gr, &g.name));
+                            }
+                        });
+                        ui.end_row();
+                    }
+                });
+            })
         });
     }
 }

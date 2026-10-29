@@ -1,6 +1,5 @@
 //! Cloud-Init (QEMU): user, password, SSH keys, per-NIC addressing, DNS.
-//! Ported from the module's `_cloudinit_*` helpers, including its rule that a
-//! working ipconfig is never replaced by an empty one.
+//! A working ipconfig is never replaced by an empty one.
 
 use super::{GCtx, value_str};
 use crate::api::Params;
@@ -247,6 +246,6 @@ impl CloudInitTab {
             }
         });
         ui.add_space(6.0);
-        ui.label(RichText::new("Applying requires a reboot of the VM.").color(theme::MUTED));
+        ui.label(RichText::new("Applying requires a reboot of the VM.").color(theme::muted()));
     }
 }

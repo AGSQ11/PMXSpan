@@ -1,5 +1,5 @@
-//! Higher-level operations built on the raw API client. These hold the
-//! provisioning logic that used to live in the HostBill module's feature traits.
+//! Higher-level operations built on the raw API client: provisioning,
+//! placement, rebuilds, IP assignment, the OS catalog and diagnostics.
 
 pub mod bandwidth;
 pub mod catalog;

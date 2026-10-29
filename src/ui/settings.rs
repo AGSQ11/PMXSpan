@@ -15,7 +15,6 @@ pub struct SettingsView {
 
 impl SettingsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, config: &mut AppConfig, vault: &mut Vault, paths: &AppPaths, actions: &mut Actions) {
-        widgets::heading(ui, "Settings & logs");
         ui.horizontal(|ui| {
             ui.selectable_value(&mut self.tab, 0, "Preferences");
             ui.selectable_value(&mut self.tab, 1, "Security");
@@ -36,8 +35,8 @@ impl SettingsView {
             egui::Grid::new("prefs").num_columns(2).spacing([16.0, 8.0]).show(ui, |ui| {
                 ui.label("Theme");
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut s.theme, ThemePref::Dark, "Dark");
-                    ui.radio_value(&mut s.theme, ThemePref::Light, "Light");
+                    ui.radio_value(&mut s.theme, ThemePref::Dark, "Graphite (dark)");
+                    ui.radio_value(&mut s.theme, ThemePref::Light, "Daylight (light)");
                     ui.radio_value(&mut s.theme, ThemePref::System, "Follow system");
                 });
                 ui.end_row();
@@ -184,9 +183,9 @@ impl SettingsView {
         egui::ScrollArea::both().stick_to_bottom(true).auto_shrink([false, false]).show(ui, |ui| {
             for l in lines {
                 let color = if l.contains(" ERROR ") {
-                    super::theme::ERR
+                    super::theme::err()
                 } else if l.contains(" WARN ") {
-                    super::theme::WARN
+                    super::theme::warn()
                 } else {
                     ui.visuals().text_color()
                 };

@@ -143,8 +143,7 @@ impl ServerProfile {
     }
 }
 
-/// How auto-placement picks a node when creating a guest (ported from the
-/// module's `node_selection` option).
+/// How auto-placement picks a node when creating a guest.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PlacementStrategy {
     /// Fill the most-loaded node that still fits (consolidate).
@@ -198,7 +197,7 @@ pub struct Settings {
     pub ui_scale: f32,
     /// Wait this long for a task before giving up watching (it keeps running server-side).
     pub task_timeout_secs: u64,
-    /// Fill new guests' description with a managed-by marker (like the module's guest markers).
+    /// Fill new guests' description with a managed-by marker.
     pub tag_managed_guests: bool,
     pub managed_tag: String,
     /// Abort a catalog download when its task log shows no progress for this long.

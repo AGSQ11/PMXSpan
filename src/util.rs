@@ -173,7 +173,7 @@ pub fn fmt_bytes(b: f64) -> String {
     if i == 0 { format!("{v:.0} {}", UNITS[i]) } else { format!("{v:.2} {}", UNITS[i]) }
 }
 
-/// Decimal units, used for traffic accounting (1 GB = 10^9 bytes, as the module did).
+/// Decimal units, used for traffic accounting (1 GB = 10^9 bytes).
 pub fn fmt_bytes_si(b: f64) -> String {
     const UNITS: [&str; 6] = ["B", "kB", "MB", "GB", "TB", "PB"];
     if !b.is_finite() || b <= 0.0 {
@@ -270,7 +270,8 @@ pub fn validate_mac(mac: &str) -> bool {
     parts.len() == 6 && parts.iter().all(|p| p.len() == 2 && u8::from_str_radix(p, 16).is_ok())
 }
 
-/// Hostname sanitization equivalent to the module's `Registrator::paranoid($h, ["."])`.
+/// Hostname sanitization: keeps ASCII letters, digits, dashes and dots,
+/// trims leading/trailing dashes and dots, and lowercases.
 pub fn sanitize_hostname(h: &str) -> String {
     let cleaned: String = h.trim().chars().filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '.').collect();
     cleaned.trim_matches(|c| c == '-' || c == '.').to_ascii_lowercase()

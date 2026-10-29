@@ -239,7 +239,7 @@ impl ManageTab {
                     ui.vertical(|ui| {
                         if catalog_entries.is_empty() {
                             ui.horizontal(|ui| {
-                                ui.label(RichText::new("No matching images in the catalog.").color(theme::WARN));
+                                ui.label(RichText::new("No matching images in the catalog.").color(theme::warn()));
                                 if ui.link("Edit the OS image catalog →").clicked() {
                                     actions.nav(crate::ui::Nav::Catalog);
                                 }
@@ -259,7 +259,7 @@ impl ManageTab {
                         }
                         if crate::ops::catalog::configured_storages(&sh.profile, !qemu).is_empty() {
                             ui.label(
-                                RichText::new("No catalog download storage is set for this server (Servers → Edit).").color(theme::WARN),
+                                RichText::new("No catalog download storage is set for this server (Servers → Edit).").color(theme::warn()),
                             );
                         } else {
                             widgets::muted(
@@ -300,7 +300,7 @@ impl ManageTab {
                 self.rb_template.clone()
             };
             let ok = !source_label.is_empty() && (qemu || !self.rb_password.is_empty() || !self.rb_keys.trim().is_empty());
-            if ui.add_enabled(ok, egui::Button::new(RichText::new("Rebuild…").color(theme::ERR).strong())).clicked() {
+            if ui.add_enabled(ok, egui::Button::new(RichText::new("Rebuild…").color(theme::err()).strong())).clicked() {
                 self.confirm = Some(
                     Confirm::new(
                         "Rebuild guest",
@@ -381,7 +381,7 @@ impl ManageTab {
                 ));
             }
             ui.checkbox(&mut self.purge, "purge from backup/replication/HA jobs");
-            if ui.button(RichText::new("Destroy…").color(theme::ERR).strong()).clicked() {
+            if ui.button(RichText::new("Destroy…").color(theme::err()).strong()).clicked() {
                 let ips: Vec<String> = sh.ipam.lock().guest_ips(&sh.server_id, g.vmid).iter().map(|a| a.ip.clone()).collect();
                 let extra = if ips.is_empty() { String::new() } else { format!(" IPAM addresses {} will be released.", ips.join(", ")) };
                 self.confirm = Some(

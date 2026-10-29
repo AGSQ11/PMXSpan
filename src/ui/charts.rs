@@ -91,12 +91,12 @@ fn chart(ui: &mut egui::Ui, id: &str, title: &str, lines: Series<'_>, bytes: boo
 pub fn rrd_charts(ui: &mut egui::Ui, id: &str, data: &[Value], node: bool) {
     let (used, total) = if node { ("memused", "memtotal") } else { ("mem", "maxmem") };
     ui.columns(2, |cols| {
-        chart(&mut cols[0], &format!("{id}-cpu"), "CPU usage (%)", vec![("CPU", series(data, "cpu", 100.0), theme::INFO)], false);
+        chart(&mut cols[0], &format!("{id}-cpu"), "CPU usage (%)", vec![("CPU", series(data, "cpu", 100.0), theme::info())], false);
         chart(
             &mut cols[1],
             &format!("{id}-mem"),
             "Memory",
-            vec![("used", series(data, used, 1.0), theme::OK), ("total", series(data, total, 1.0), theme::MUTED)],
+            vec![("used", series(data, used, 1.0), theme::ok()), ("total", series(data, total, 1.0), theme::muted())],
             true,
         );
     });
@@ -106,17 +106,17 @@ pub fn rrd_charts(ui: &mut egui::Ui, id: &str, data: &[Value], node: bool) {
             &mut cols[0],
             &format!("{id}-net"),
             "Network (bytes/s)",
-            vec![("in", series(data, "netin", 1.0), theme::OK), ("out", series(data, "netout", 1.0), theme::ACCENT)],
+            vec![("in", series(data, "netin", 1.0), theme::ok()), ("out", series(data, "netout", 1.0), theme::accent())],
             true,
         );
         if node {
-            chart(&mut cols[1], &format!("{id}-load"), "Load average", vec![("load", series(data, "loadavg", 1.0), theme::WARN)], false);
+            chart(&mut cols[1], &format!("{id}-load"), "Load average", vec![("load", series(data, "loadavg", 1.0), theme::warn())], false);
         } else {
             chart(
                 &mut cols[1],
                 &format!("{id}-disk"),
                 "Disk IO (bytes/s)",
-                vec![("read", series(data, "diskread", 1.0), theme::INFO), ("write", series(data, "diskwrite", 1.0), theme::WARN)],
+                vec![("read", series(data, "diskread", 1.0), theme::info()), ("write", series(data, "diskwrite", 1.0), theme::warn())],
                 true,
             );
         }

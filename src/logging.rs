@@ -1,7 +1,7 @@
 //! File + in-memory logging with credential redaction.
 //!
-//! Every log line passes through [`crate::util::redact`] before it is written,
-//! mirroring the module's Monolog redaction processor. The most recent lines
+//! Every log line passes through [`crate::util::redact`] before it is written.
+//! The most recent lines
 //! are kept in memory for the in-app log viewer.
 
 use crate::config::AppPaths;

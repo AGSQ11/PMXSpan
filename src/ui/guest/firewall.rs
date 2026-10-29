@@ -163,7 +163,7 @@ impl FirewallTab {
             let macros = self.macros.ok().cloned().unwrap_or_default();
             let mut submit = false;
             let mut cancel = false;
-            egui::Frame::group(ui.style()).show(ui, |ui| {
+            crate::ui::theme::card_frame().inner_margin(egui::Margin::symmetric(14, 12)).show(ui, |ui| {
                 egui::Grid::new("fw-form").num_columns(4).spacing([10.0, 6.0]).show(ui, |ui| {
                     ui.label("Direction");
                     egui::ComboBox::from_id_salt("fw-dir").selected_text(f.rtype.clone()).show_ui(ui, |ui| {
@@ -263,7 +263,7 @@ impl FirewallTab {
                         toggle = Some((r.pos, en));
                     }
                     ui.label(&r.rtype);
-                    let color = if r.action == "ACCEPT" { theme::OK } else { theme::ERR };
+                    let color = if r.action == "ACCEPT" { theme::ok() } else { theme::err() };
                     ui.label(RichText::new(&r.action).color(color));
                     ui.label(if r.macro_.is_empty() { r.proto.clone() } else { r.macro_.clone() });
                     ui.label(&r.source);
@@ -271,7 +271,7 @@ impl FirewallTab {
                     ui.label(&r.dport);
                     ui.horizontal(|ui| {
                         ui.label(&r.comment);
-                        if ui.small_button(RichText::new("✖").color(theme::ERR)).on_hover_text("Delete rule").clicked() {
+                        if ui.small_button(RichText::new("✖").color(theme::err())).on_hover_text("Delete rule").clicked() {
                             del = Some(r.pos);
                         }
                     });

@@ -1,8 +1,7 @@
 //! ProxmoxPanel — a standalone desktop manager for Proxmox VE clusters.
 //!
-//! This is a port of the `proxmoxopen` HostBill provisioning module into a
-//! self-contained GUI application: no billing system, no PHP, no web server.
-//! It talks directly to the Proxmox VE API.
+//! A self-contained GUI application that talks directly to the Proxmox VE API:
+//! no web server, no database, no agents on the nodes.
 
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 

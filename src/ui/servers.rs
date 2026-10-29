@@ -31,7 +31,6 @@ impl ServersView {
         connecting: bool,
         actions: &mut Actions,
     ) {
-        widgets::heading(ui, "Servers");
         if let Some(id) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_delete) {
             config.profiles.retain(|p| p.id != id);
             let _ = vault.remove(&format!("server:{id}"));
@@ -65,7 +64,7 @@ impl ServersView {
                 for p in &config.profiles {
                     let is_conn = connected == Some(p.id.as_str());
                     let label = if is_conn {
-                        RichText::new(format!("● {}", p.display_name())).color(theme::OK)
+                        RichText::new(format!("● {}", p.display_name())).color(theme::ok())
                     } else {
                         RichText::new(p.display_name())
                     };
@@ -197,7 +196,7 @@ impl ServersView {
             }
             if draft.tls == TlsMode::Insecure {
                 ui.label("");
-                ui.label(RichText::new("Certificates are not checked: credentials can be intercepted.").color(theme::WARN));
+                ui.label(RichText::new("Certificates are not checked: credentials can be intercepted.").color(theme::warn()));
                 ui.end_row();
             }
             ui.label("Request timeout");
@@ -251,7 +250,7 @@ impl ServersView {
             if diag_loading {
                 ui.spinner();
             }
-            if !is_new && ui.button(RichText::new("Delete").color(theme::ERR)).clicked() {
+            if !is_new && ui.button(RichText::new("Delete").color(theme::err())).clicked() {
                 self.confirm_delete = Some(
                     Confirm::new(
                         "Delete server",
@@ -262,7 +261,7 @@ impl ServersView {
                 );
             }
             if connected == Some(draft.id.as_str()) {
-                ui.label(RichText::new("connected").color(theme::OK));
+                ui.label(RichText::new("connected").color(theme::ok()));
             }
         });
         if save || save_connect {
@@ -303,11 +302,11 @@ pub fn report_ui(ui: &mut egui::Ui, r: &Report) {
         widgets::kv(ui, "Proxmox VE", format!("{} (release {})", r.version, r.release));
         widgets::kv(ui, "Cluster", r.cluster_name.clone().unwrap_or_else(|| "standalone node".into()));
         if let Some(q) = r.quorate {
-            ui.label(RichText::new("Quorum").color(theme::MUTED));
-            ui.label(if q { RichText::new("quorate").color(theme::OK) } else { RichText::new("NOT quorate").color(theme::ERR) });
+            ui.label(RichText::new("Quorum").color(theme::muted()));
+            ui.label(if q { RichText::new("quorate").color(theme::ok()) } else { RichText::new("NOT quorate").color(theme::err()) });
             ui.end_row();
         }
-        ui.label(RichText::new("Nodes").color(theme::MUTED));
+        ui.label(RichText::new("Nodes").color(theme::muted()));
         ui.horizontal_wrapped(|ui| {
             for n in &r.nodes {
                 widgets::status_dot(ui, if n.online { "online" } else { "offline" });
@@ -323,8 +322,8 @@ pub fn report_ui(ui: &mut egui::Ui, r: &Report) {
             let list = r.content_matrix.get(ct);
             ui.label(format!("{ct} ({what})"));
             match list {
-                Some(l) => ui.label(RichText::new(l.join(", ")).color(theme::OK)),
-                None => ui.label(RichText::new("none").color(theme::WARN)),
+                Some(l) => ui.label(RichText::new(l.join(", ")).color(theme::ok())),
+                None => ui.label(RichText::new("none").color(theme::warn())),
             };
             ui.end_row();
         }
@@ -336,7 +335,7 @@ pub fn report_ui(ui: &mut egui::Ui, r: &Report) {
                 ui.label(&s.stype);
                 ui.label(if s.shared { "shared" } else { "local" });
                 ui.label(format!("nodes: {}", s.nodes));
-                ui.label(if s.disabled { RichText::new("disabled").color(theme::WARN) } else { RichText::new(&s.content).small() });
+                ui.label(if s.disabled { RichText::new("disabled").color(theme::warn()) } else { RichText::new(&s.content).small() });
                 ui.end_row();
             }
         });
@@ -346,7 +345,7 @@ pub fn report_ui(ui: &mut egui::Ui, r: &Report) {
         ui.label(RichText::new("Effective privileges on /").strong());
         ui.horizontal_wrapped(|ui| {
             for (p, g) in &r.privileges {
-                ui.label(RichText::new(format!("{} {p}", if *g { "✔" } else { "✖" })).color(if *g { theme::OK } else { theme::ERR }));
+                ui.label(RichText::new(format!("{} {p}", if *g { "✔" } else { "✖" })).color(if *g { theme::ok() } else { theme::err() }));
             }
         });
     }
