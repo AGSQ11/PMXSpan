@@ -237,8 +237,131 @@ pub async fn snapshot_delete(client: &PveClient, ctx: &JobCtx, g: &GuestRef, nam
     Ok(format!("snapshot '{name}' deleted"))
 }
 
-/// Backups of this guest across every backup-capable storage visible on its node.
-pub async fn backups(client: &PveClient, g: &GuestRef) -> anyhow::Result<Vec<(String, StorageItem)>> {
+/// Snippet volumes (`storage:snippets/file`) on storages with `snippets`
+/// content across `nodes`. Proxmox's API cannot upload snippets; they are
+/// placed on the node (e.g. /var/lib/vz/snippets) by other means.
+pub async fn list_snippets(client: &PveClient, nodes: Vec<String>) -> anyhow::Result<Vec<String>> {
+    let mut out = std::collections::BTreeSet::new();
+    for n in nodes {
+        let storages = client.get_q(&format!("/nodes/{n}/storage"), &Params::new().set("content", "snippets").set("enabled", 1)).await?;
+        for s in storages.arr() {
+            let name = s.s("storage");
+            if let Ok(items) = client.get_q(&format!("/nodes/{n}/storage/{name}/content"), &Params::new().set("content", "snippets")).await
+            {
+                out.extend(items.arr().iter().map(|i| i.s("volid")).filter(|v| !v.is_empty()));
+            }
+        }
+    }
+    Ok(out.into_iter().collect())
+}
+
+/// The parts of a `cicustom` value: user, vendor, network and meta files.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct CiCustom {
+    pub user: Option<String>,
+    pub vendor: Option<String>,
+    pub network: Option<String>,
+    pub meta: Option<String>,
+}
+
+impl CiCustom {
+    pub fn parse(s: &str) -> Self {
+        let p = PropString::parse(s);
+        let get = |k: &str| p.get(k).map(str::to_string).filter(|v| !v.is_empty());
+        Self { user: get("user"), vendor: get("vendor"), network: get("network"), meta: get("meta") }
+    }
+
+    /// The config value (empty = no custom files).
+    pub fn value(&self) -> String {
+        [("user", &self.user), ("vendor", &self.vendor), ("network", &self.network), ("meta", &self.meta)]
+            .iter()
+            .filter_map(|(k, v)| v.as_ref().map(|v| format!("{k}={v}")))
+            .collect::<Vec<_>>()
+            .join(",")
+    }
+}
+
+/// Which guest type a backup volume holds, from its format or file name.
+pub fn backup_kind(b: &StorageItem) -> Option<GuestKind> {
+    if b.format == "pbs-vm" || b.volid.contains("vzdump-qemu-") {
+        Some(GuestKind::Qemu)
+    } else if b.format == "pbs-ct" || b.volid.contains("vzdump-lxc-") || b.volid.contains("vzdump-openvz-") {
+        Some(GuestKind::Lxc)
+    } else {
+        None
+    }
+}
+
+/// A Proxmox Backup Server snapshot, whose files can be browsed.
+pub fn is_pbs_backup(b: &StorageItem) -> bool {
+    b.format.starts_with("pbs-")
+}
+
+/// One entry of a PBS snapshot during single-file restore.
+#[derive(Clone, Debug)]
+pub struct RestoreEntry {
+    /// Base64 path, as the API wants it back.
+    pub filepath: String,
+    pub text: String,
+    /// `d` directory, `f` file, `v` virtual (archive / disk / partition), `l` symlink, `h` hardlink.
+    pub kind: String,
+    pub leaf: bool,
+    pub size: Option<u64>,
+    pub mtime: Option<i64>,
+}
+
+impl RestoreEntry {
+    pub fn is_dir(&self) -> bool {
+        matches!(self.kind.as_str(), "d" | "v") || !self.leaf
+    }
+}
+
+/// Lists a directory of a PBS backup (`filepath` = "/" for the top).
+/// The first call can take a minute while Proxmox starts its restore helper.
+pub async fn file_restore_list(
+    client: &PveClient,
+    node: &str,
+    storage: &str,
+    volume: &str,
+    filepath: &str,
+) -> anyhow::Result<Vec<RestoreEntry>> {
+    let p = Params::new().set("volume", volume).set("filepath", filepath);
+    let v = client.get_q(&format!("/nodes/{node}/storage/{storage}/file-restore/list"), &p).await?;
+    let mut out: Vec<RestoreEntry> = v
+        .arr()
+        .iter()
+        .map(|e| RestoreEntry {
+            filepath: e.s("filepath"),
+            text: e.s("text"),
+            kind: e.s("type"),
+            leaf: e.b("leaf"),
+            size: e.get("size").and_then(Value::as_u64),
+            mtime: e.get("mtime").and_then(Value::as_i64),
+        })
+        .collect();
+    out.sort_by(|a, b| b.is_dir().cmp(&a.is_dir()).then_with(|| a.text.to_lowercase().cmp(&b.text.to_lowercase())));
+    Ok(out)
+}
+
+/// Downloads one file, or a directory as a zip (or tar.zst), from a PBS backup.
+pub async fn file_restore_download(
+    client: &PveClient,
+    node: &str,
+    storage: &str,
+    volume: &str,
+    filepath: &str,
+    tar: bool,
+    dest: &std::path::Path,
+) -> anyhow::Result<String> {
+    let p = Params::new().set("volume", volume).set("filepath", filepath).flag("tar", tar);
+    let n = client.download(&format!("/nodes/{node}/storage/{storage}/file-restore/download"), &p, dest).await?;
+    Ok(format!("saved {} to {}", crate::util::fmt_bytes(n as f64), dest.display()))
+}
+
+/// Backups of this guest across every backup-capable storage visible on its
+/// node; with `all`, backups of every guest of the same type (to restore
+/// another guest's backup over this one).
+pub async fn backups_on_node(client: &PveClient, g: &GuestRef, all: bool) -> anyhow::Result<Vec<(String, StorageItem)>> {
     let storages = client.get_q(&format!("/nodes/{}/storage", g.node), &Params::new().set("content", "backup")).await?;
     let mut out = Vec::new();
     for s in storages.arr() {
@@ -246,11 +369,19 @@ pub async fn backups(client: &PveClient, g: &GuestRef) -> anyhow::Result<Vec<(St
         if s.get("active").is_some() && !s.b("active") {
             continue;
         }
-        let items = client
-            .get_q(&format!("/nodes/{}/storage/{name}/content", g.node), &Params::new().set("content", "backup").set("vmid", g.vmid))
-            .await;
+        let mut p = Params::new().set("content", "backup");
+        if !all {
+            p.push("vmid", g.vmid);
+        }
+        let items = client.get_q(&format!("/nodes/{}/storage/{name}/content", g.node), &p).await;
         match items {
-            Ok(items) => out.extend(items.arr().iter().map(|i| (name.clone(), StorageItem::from_value(i)))),
+            Ok(items) => out.extend(
+                items
+                    .arr()
+                    .iter()
+                    .map(|i| (name.clone(), StorageItem::from_value(i)))
+                    .filter(|(_, b)| !all || backup_kind(b) == Some(g.kind)),
+            ),
             Err(e) => tracing::warn!("listing backups on {name}: {e:#}"),
         }
     }

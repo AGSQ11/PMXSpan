@@ -2,7 +2,7 @@
 
 mod agent;
 mod backups;
-mod cloudinit;
+pub mod cloudinit;
 mod firewall;
 mod hardware;
 mod ips;

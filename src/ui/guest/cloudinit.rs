@@ -6,7 +6,8 @@ use crate::api::Params;
 use crate::api::types::is_net_key;
 use crate::ipam::AllocRequest;
 use crate::ops::create::encode_sshkeys;
-use crate::ops::guest;
+use crate::ops::guest::{self, CiCustom};
+use crate::rt::Fetch;
 use crate::ui::{Actions, theme, widgets};
 use crate::util::PropString;
 use egui::RichText;
@@ -24,6 +25,51 @@ pub struct CloudInitTab {
     ipam_pool: Option<String>,
     ipam_preferred: String,
     regenerate: bool,
+    custom: CiPicker,
+}
+
+/// Picks custom cloud-init snippet files (`cicustom`) from the snippets the
+/// cluster's nodes hold.
+#[derive(Default)]
+pub struct CiPicker {
+    pub value: CiCustom,
+    snippets: Fetch<Vec<String>>,
+}
+
+impl CiPicker {
+    pub fn ui(&mut self, ui: &mut egui::Ui, sh: &crate::ui::Shared) {
+        if self.snippets.is_idle() {
+            let nodes = sh.online_nodes();
+            self.snippets = sh.fetch(move |c| async move { guest::list_snippets(&c, nodes).await });
+        }
+        let list = self.snippets.ok().cloned().unwrap_or_default();
+        ui.vertical(|ui| {
+            ui.horizontal_wrapped(|ui| {
+                for (label, slot) in
+                    [("user", &mut self.value.user), ("vendor", &mut self.value.vendor), ("network", &mut self.value.network)]
+                {
+                    ui.label(label);
+                    let mut options = list.clone();
+                    if let Some(v) = slot.as_ref()
+                        && !options.contains(v)
+                    {
+                        options.push(v.clone());
+                    }
+                    widgets::combo_opt(ui, &format!("cic-{label}"), slot, &options, "generated", 210.0);
+                }
+                if self.snippets.is_loading() {
+                    ui.spinner();
+                }
+            });
+            if self.snippets.ok().is_some_and(|l| l.is_empty()) {
+                widgets::muted(
+                    ui,
+                    "No snippets found. Put files in a storage with the `snippets` content type (e.g. /var/lib/vz/snippets for `local`); \
+                     the Proxmox API cannot upload them.",
+                );
+            }
+        });
+    }
 }
 
 impl CloudInitTab {
@@ -52,6 +98,7 @@ impl CloudInitTab {
             })
             .collect();
         self.regenerate = true;
+        self.custom.value = CiCustom::parse(&s("cicustom"));
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, gc: &GCtx, actions: &mut Actions) {
@@ -107,6 +154,9 @@ impl CloudInitTab {
             ui.end_row();
             ui.label("Search domain");
             ui.add(egui::TextEdit::singleline(&mut self.searchdomain).hint_text("use host settings"));
+            ui.end_row();
+            ui.label("Custom files");
+            self.custom.ui(ui, gc.sh);
             ui.end_row();
             for (key, val) in self.ipconfig.iter_mut() {
                 ui.label(format!("{key} (net{})", key.trim_start_matches("ipconfig")));
@@ -193,6 +243,7 @@ impl CloudInitTab {
                 let mut deletes = Vec::new();
                 let cur = |k: &str| cfg.get(k).map(value_str).unwrap_or_default();
                 for (k, v, cur_v) in [
+                    ("cicustom", self.custom.value.value(), CiCustom::parse(&cur("cicustom")).value()),
                     ("ciuser", self.ciuser.trim().to_string(), cur("ciuser")),
                     ("nameserver", self.nameserver.trim().to_string(), cur("nameserver")),
                     ("searchdomain", self.searchdomain.trim().to_string(), cur("searchdomain")),

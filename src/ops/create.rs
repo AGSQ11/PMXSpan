@@ -137,6 +137,8 @@ pub struct CreateSpec {
     pub start: bool,
     /// Add to HA (with this group; empty = none).
     pub ha: Option<String>,
+    /// QEMU `cicustom` (custom cloud-init snippet files); empty = none.
+    pub cicustom: String,
 }
 
 impl Default for CreateSpec {
@@ -171,6 +173,7 @@ impl Default for CreateSpec {
             onboot: true,
             start: true,
             ha: None,
+            cicustom: String::new(),
         }
     }
 }
@@ -434,6 +437,19 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
     spec.hostname = sanitize_hostname(&spec.hostname);
     validate(&spec)?;
     let kind = spec.source.kind();
+
+    // 0. Tenant pool limits.
+    if let Some(pool) = &spec.pool {
+        let ips = [&spec.net.ipv4, &spec.net.ipv6].iter().filter(|m| matches!(m, IpMode::Ipam { .. })).count() as u64;
+        let add = super::limits::Usage {
+            guests: 1,
+            cores: u64::from(spec.cores) * u64::from(spec.sockets.max(1)),
+            memory_mb: spec.memory_mb,
+            disk_gb: spec.disk_gb,
+            ips,
+        };
+        super::limits::enforce(client, env.profile.pool_limits.get(pool), pool, &env.ipam, &env.server_id, add).await?;
+    }
 
     // 1. VMID
     let range = env.profile.vmid_range();
@@ -766,6 +782,9 @@ async fn create_qemu_catalog(
     if !user.is_empty() {
         p.push("ciuser", user);
     }
+    if !spec.cicustom.is_empty() {
+        p.push("cicustom", &spec.cicustom);
+    }
     if !spec.password.is_empty() {
         p.push("cipassword", &spec.password);
     }
@@ -876,8 +895,12 @@ pub async fn configure_cloned(
         p.push("cpulimit", format!("{l}"));
     }
     let has_ci = tcfg.values().any(|v| v.as_str().map(|s| s.contains("cloudinit")).unwrap_or(false));
-    let wants_ci =
-        !spec.ciuser.is_empty() || !spec.password.is_empty() || !spec.ssh_keys.trim().is_empty() || ips.ip4.is_some() || ips.ip6.is_some();
+    let wants_ci = !spec.ciuser.is_empty()
+        || !spec.password.is_empty()
+        || !spec.ssh_keys.trim().is_empty()
+        || !spec.cicustom.is_empty()
+        || ips.ip4.is_some()
+        || ips.ip6.is_some();
     if wants_ci {
         if !has_ci {
             let cfg = guest::config(client, g).await?;
@@ -892,6 +915,9 @@ pub async fn configure_cloned(
         }
         if !spec.ciuser.is_empty() {
             p.push("ciuser", &spec.ciuser);
+        }
+        if !spec.cicustom.is_empty() {
+            p.push("cicustom", &spec.cicustom);
         }
         if !spec.password.is_empty() {
             p.push("cipassword", &spec.password);

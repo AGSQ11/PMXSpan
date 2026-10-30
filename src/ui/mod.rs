@@ -76,6 +76,8 @@ pub enum Action {
     Lock,
     /// Put a node of the connected server in or out of maintenance.
     SetMaintenance(String, bool),
+    /// Set (or clear, when unlimited) a tenant pool's limits on the connected server.
+    SetPoolLimits(String, crate::config::PoolLimits),
     ConfigChanged,
 }
 
@@ -497,6 +499,23 @@ impl App {
                     self.nav = Nav::Servers;
                 }
                 Action::Lock => self.lock(),
+                Action::SetPoolLimits(pool, limits) => {
+                    let Some(sid) = self.session.as_ref().map(|s| s.shared.server_id.clone()) else { continue };
+                    if let Some(p) = self.config.profiles.iter_mut().find(|p| p.id == sid) {
+                        if limits.is_unlimited() {
+                            p.pool_limits.remove(&pool);
+                        } else {
+                            p.pool_limits.insert(pool.clone(), limits);
+                        }
+                    }
+                    self.save_config();
+                    self.toast(ToastLevel::Ok, format!("Limits of pool {pool} saved"));
+                    if let Some(s) = self.session.as_mut()
+                        && let Some(p) = self.config.profile(&sid)
+                    {
+                        s.shared.profile = p.clone();
+                    }
+                }
                 Action::SetMaintenance(node, on) => {
                     let Some(sid) = self.session.as_ref().map(|s| s.shared.server_id.clone()) else { continue };
                     if let Some(p) = self.config.profiles.iter_mut().find(|p| p.id == sid) {

@@ -65,6 +65,7 @@ const QEMU_KEEP: &[&str] = &[
     "nameserver",
     "searchdomain",
     "ciuser",
+    "cicustom",
     "sshkeys",
     "protection",
     "startup",

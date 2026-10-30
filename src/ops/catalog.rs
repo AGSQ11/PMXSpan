@@ -340,6 +340,9 @@ pub fn parse_catalog(text: &str) -> anyhow::Result<Vec<CatalogEntry>> {
 #[serde(default)]
 pub struct CatalogStore {
     pub entries: Vec<CatalogEntry>,
+    /// Custom cloud-init files (`cicustom`) per entry id. Kept locally:
+    /// never exported or taken from an imported catalog.
+    pub cicustom: BTreeMap<String, String>,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -372,7 +375,29 @@ impl CatalogStore {
         self.save()
     }
 
+    /// Sets (or with an empty value clears) an entry's custom cloud-init
+    /// files, moving them when the entry's id changed.
+    pub fn set_cicustom(&mut self, original_id: Option<&str>, id: &str, value: &str) -> anyhow::Result<()> {
+        if let Some(o) = original_id {
+            self.cicustom.remove(o);
+        }
+        let value = value.trim();
+        if value.is_empty() {
+            self.cicustom.remove(id);
+        } else {
+            let p = crate::util::PropString::parse(value);
+            for (k, v) in &p.parts {
+                if !["user", "vendor", "network", "meta"].contains(&k.as_str()) || !v.contains(":snippets/") {
+                    bail!("custom cloud-init must look like `user=local:snippets/user.yml,vendor=local:snippets/vendor.yml`");
+                }
+            }
+            self.cicustom.insert(id.to_string(), p.to_string());
+        }
+        self.save()
+    }
+
     pub fn remove(&mut self, id: &str) -> anyhow::Result<()> {
+        self.cicustom.remove(id);
         self.entries.retain(|e| e.id != id);
         self.save()
     }

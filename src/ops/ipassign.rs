@@ -303,6 +303,16 @@ pub struct AssignSpec {
     pub make_main: bool,
 }
 
+/// Checks the guest's tenant pool IP limit before `count` more addresses.
+async fn enforce_ip_limit(env: &Env, vmid: u64, count: u64) -> anyhow::Result<()> {
+    if env.profile.pool_limits.is_empty() || count == 0 {
+        return Ok(());
+    }
+    let Some(pool) = super::limits::pool_of(&env.client, vmid).await? else { return Ok(()) };
+    let add = super::limits::Usage { ips: count, ..Default::default() };
+    super::limits::enforce(&env.client, env.profile.pool_limits.get(&pool), &pool, &env.ipam, &env.server_id, add).await
+}
+
 /// Allocates addresses from IPAM for one interface and applies them.
 pub async fn assign(env: Env, ctx: JobCtx, g: GuestRef, spec: AssignSpec, opts: ApplyOpts) -> anyhow::Result<String> {
     let cfg = guest::config(&env.client, &g).await?;
@@ -310,6 +320,7 @@ pub async fn assign(env: Env, ctx: JobCtx, g: GuestRef, spec: AssignSpec, opts: 
         bail!("net{} does not exist on this guest", spec.iface);
     }
     let name = cfg.get("name").or_else(|| cfg.get("hostname")).map(value_str).unwrap_or_default();
+    enforce_ip_limit(&env, g.vmid, spec.count.max(1) as u64).await?;
     let req = AllocRequest {
         server_id: env.server_id.clone(),
         vmid: g.vmid,
@@ -392,6 +403,7 @@ pub async fn add_interface(env: Env, ctx: JobCtx, g: GuestRef, spec: NewInterfac
         .or_else(|| pool_bridge(&spec.pool6))
         .unwrap_or_else(|| env.settings.default_bridge.clone());
     let name = cfg.get("name").or_else(|| cfg.get("hostname")).map(value_str).unwrap_or_default();
+    enforce_ip_limit(&env, g.vmid, (spec.count4 + spec.count6) as u64).await?;
     let mut allocated = Vec::new();
     for (v6, count, pool, pref) in [(false, spec.count4, &spec.pool4, &spec.preferred4), (true, spec.count6, &spec.pool6, &spec.preferred6)]
     {

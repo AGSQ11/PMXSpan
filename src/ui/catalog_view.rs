@@ -17,11 +17,13 @@ struct Draft {
     entry: CatalogEntry,
     nodes: String,
     config: String,
+    cicustom: String,
 }
 
 impl Draft {
-    fn from_entry(e: &CatalogEntry) -> Self {
+    fn from_entry(e: &CatalogEntry, store: &CatalogStore) -> Self {
         Self {
+            cicustom: store.cicustom.get(&e.id).cloned().unwrap_or_default(),
             original: Some(e.id.clone()),
             entry: e.clone(),
             nodes: e.nodes.join(", "),
@@ -112,7 +114,7 @@ impl CatalogView {
                         let sel = self.draft.as_ref().and_then(|d| d.original.as_deref()) == Some(e.id.as_str());
                         let tag = if e.is_lxc() { "CT" } else { "VM" };
                         if ui.selectable_label(sel, format!("[{tag}]  {}", e.label)).on_hover_text(&e.url).clicked() {
-                            self.draft = Some(Draft::from_entry(e));
+                            self.draft = Some(Draft::from_entry(e, &store.lock()));
                             self.error = None;
                             self.probe = Fetch::default();
                         }
@@ -223,6 +225,19 @@ impl CatalogView {
             ui.label("Nodes");
             ui.add(egui::TextEdit::singleline(&mut d.nodes).hint_text("any node (or: pve1, pve2)").desired_width(260.0));
             ui.end_row();
+            if !e.is_lxc() {
+                ui.label("Custom cloud-init");
+                ui.vertical(|ui| {
+                    ui.add(
+                        egui::TextEdit::singleline(&mut d.cicustom)
+                            .hint_text("user=local:snippets/web.yml,vendor=local:snippets/vendor.yml")
+                            .desired_width(440.0)
+                            .font(egui::TextStyle::Monospace),
+                    );
+                    widgets::muted(ui, "Snippet files on the nodes (`cicustom`). Kept on this computer only: never exported or imported.");
+                });
+                ui.end_row();
+            }
             ui.label("High availability");
             ui.horizontal(|ui| {
                 ui.checkbox(&mut e.ha, "add new guests to HA");
@@ -259,10 +274,14 @@ impl CatalogView {
         ui.horizontal(|ui| {
             if ui.button(RichText::new("Save image").strong()).clicked() {
                 match d.build() {
-                    Ok(entry) => match store.lock().upsert(d.original.as_deref(), entry.clone()) {
+                    Ok(entry) => match {
+                        let mut st = store.lock();
+                        st.upsert(d.original.as_deref(), entry.clone())
+                            .and_then(|()| st.set_cicustom(d.original.as_deref(), &entry.id, &d.cicustom))
+                    } {
                         Ok(()) => {
                             actions.toast_ok(format!("Saved '{}'", entry.label));
-                            *d = Draft::from_entry(&entry);
+                            *d = Draft::from_entry(&entry, &store.lock());
                             self.error = None;
                         }
                         Err(err) => self.error = Some(format!("{err:#}")),

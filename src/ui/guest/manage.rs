@@ -393,7 +393,13 @@ impl ManageTab {
             let current = Some(gc.res.pool.clone()).filter(|p| !p.is_empty());
             if self.pool != current && ui.button("Apply").clicked() {
                 let (c, vmid, from, to) = (sh.client.clone(), g.vmid, current.clone(), self.pool.clone());
+                let (ipam, sid, limits) = (sh.ipam.clone(), sh.server_id.clone(), sh.profile.pool_limits.clone());
+                // What the guest brings into the target pool's limits.
+                let mine = crate::ops::limits::usage(&gc.res.pool, std::slice::from_ref(gc.res), &sh.ipam.lock(), &sh.server_id);
                 sh.spawn(gc.title("Change pool"), move |_ctx| async move {
+                    if let Some(t) = &to {
+                        crate::ops::limits::enforce(&c, limits.get(t), t, &ipam, &sid, mine).await?;
+                    }
                     if let Some(f) = &from {
                         c.put(&format!("/pools/{f}"), &Params::new().set("vms", vmid).set("delete", 1)).await?;
                     }

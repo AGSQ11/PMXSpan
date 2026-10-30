@@ -145,6 +145,25 @@ pub struct ServerProfile {
     pub vmid_max: u64,
     /// Nodes auto-placement skips (kept locally; Proxmox is not told).
     pub maintenance_nodes: Vec<String>,
+    /// Resource limits per tenant pool, enforced by PMXSpan.
+    pub pool_limits: std::collections::BTreeMap<String, PoolLimits>,
+}
+
+/// Limits for one tenant pool; 0 = unlimited.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PoolLimits {
+    pub guests: u64,
+    pub cores: u64,
+    pub memory_mb: u64,
+    pub disk_gb: u64,
+    pub ips: u64,
+}
+
+impl PoolLimits {
+    pub fn is_unlimited(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 impl Default for ServerProfile {
@@ -170,6 +189,7 @@ impl Default for ServerProfile {
             vmid_min: 0,
             vmid_max: 0,
             maintenance_nodes: Vec::new(),
+            pool_limits: Default::default(),
         }
     }
 }

@@ -9,6 +9,7 @@ pub mod drift;
 pub mod export;
 pub mod guest;
 pub mod ipassign;
+pub mod limits;
 pub mod placement;
 pub mod rebuild;
 pub mod tenant;

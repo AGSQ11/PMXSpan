@@ -50,6 +50,7 @@ pub struct AccessView {
     acl_who: String,
     acl_role: String,
     confirm: Option<Confirm<Del>>,
+    limits_edit: Option<(String, crate::config::PoolLimits)>,
 }
 
 impl AccessView {
@@ -117,7 +118,7 @@ impl AccessView {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| match self.tab {
             Tab::Tenant => self.tenant_ui(ui, sh),
             Tab::Users => self.users_ui(ui, sh),
-            Tab::Pools => self.pools_ui(ui, sh),
+            Tab::Pools => self.pools_ui(ui, sh, _actions),
             Tab::Acl => self.acl_ui(ui, sh),
         });
     }
@@ -294,7 +295,8 @@ impl AccessView {
         }
     }
 
-    fn pools_ui(&mut self, ui: &mut egui::Ui, sh: &Shared) {
+    fn pools_ui(&mut self, ui: &mut egui::Ui, sh: &Shared, actions: &mut Actions) {
+        self.limits_window(ui.ctx(), sh, actions);
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut self.new_pool).hint_text("pool id").desired_width(160.0));
             if ui.add_enabled(!self.new_pool.is_empty(), egui::Button::new("Create pool")).clicked() {
@@ -307,23 +309,105 @@ impl AccessView {
             }
         });
         let mut del = None;
+        let mut edit_limits = None;
         widgets::fetch_ui(ui, &mut self.pools, |ui, pools| {
-            egui::Grid::new("pools").striped(true).num_columns(3).spacing([12.0, 4.0]).show(ui, |ui| {
+            egui::Grid::new("pools").striped(true).num_columns(4).spacing([12.0, 4.0]).show(ui, |ui| {
+                for h in ["Pool", "Guests", "Usage / limits", ""] {
+                    ui.label(RichText::new(h).strong());
+                }
+                ui.end_row();
                 for p in pools.iter() {
                     let id = p.s("poolid");
                     ui.label(RichText::new(&id).strong());
                     let members: Vec<String> =
                         sh.guests().filter(|g| g.pool == id).map(|g| format!("{} {}", g.vmid, g.display_name())).collect();
                     ui.label(if members.is_empty() { p.s("comment") } else { members.join(", ") });
-                    if ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
-                        del = Some(id.clone());
-                    }
+                    let limits = sh.profile.pool_limits.get(&id).cloned().unwrap_or_default();
+                    let u = crate::ops::limits::usage(&id, &sh.resources, &sh.ipam.lock(), &sh.server_id);
+                    let part = |name: &str, used: u64, limit: u64, unit: &str| {
+                        if limit > 0 { format!("{name} {used}/{limit}{unit}") } else { format!("{name} {used}{unit}") }
+                    };
+                    let text = [
+                        part("guests", u.guests, limits.guests, ""),
+                        part("vCPU", u.cores, limits.cores, ""),
+                        part("RAM", u.memory_mb / 1024, limits.memory_mb / 1024, " GiB"),
+                        part("disk", u.disk_gb, limits.disk_gb, " GiB"),
+                        part("IPs", u.ips, limits.ips, ""),
+                    ]
+                    .join(" · ");
+                    let over = (limits.guests > 0 && u.guests > limits.guests)
+                        || (limits.cores > 0 && u.cores > limits.cores)
+                        || (limits.memory_mb > 0 && u.memory_mb > limits.memory_mb)
+                        || (limits.disk_gb > 0 && u.disk_gb > limits.disk_gb)
+                        || (limits.ips > 0 && u.ips > limits.ips);
+                    let color = if over {
+                        theme::err()
+                    } else if limits.is_unlimited() {
+                        theme::muted()
+                    } else {
+                        theme::p().text
+                    };
+                    ui.label(RichText::new(text).color(color));
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Limits…").clicked() {
+                            edit_limits = Some((id.clone(), limits.clone()));
+                        }
+                        if ui.small_button(RichText::new("Delete").color(theme::err())).clicked() {
+                            del = Some(id.clone());
+                        }
+                    });
                     ui.end_row();
                 }
             });
         });
         if let Some(p) = del {
             self.confirm = Some(Confirm::new("Delete pool", format!("Delete pool {p}? (It must be empty.)"), Del::Pool(p)));
+        }
+        if edit_limits.is_some() {
+            self.limits_edit = edit_limits;
+        }
+    }
+
+    fn limits_window(&mut self, ctx: &egui::Context, _sh: &Shared, actions: &mut Actions) {
+        let Some((pool, l)) = self.limits_edit.as_mut() else { return };
+        let mut open = true;
+        let mut save = false;
+        egui::Window::new(format!("Limits of pool {pool}")).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
+            widgets::muted(
+                ui,
+                "Enforced by PMXSpan when it creates a guest in this pool, assigns addresses to one of its guests or moves a guest \
+                 into it. 0 = unlimited. Disk counts each guest's root disk.",
+            );
+            egui::Grid::new("pool-limits").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                ui.label("Guests");
+                ui.add(egui::DragValue::new(&mut l.guests).range(0..=100_000));
+                ui.end_row();
+                ui.label("vCPUs");
+                ui.add(egui::DragValue::new(&mut l.cores).range(0..=100_000));
+                ui.end_row();
+                ui.label("Memory");
+                ui.add(egui::DragValue::new(&mut l.memory_mb).range(0..=100_000_000).speed(256).suffix(" MiB"));
+                ui.end_row();
+                ui.label("Disk");
+                ui.add(egui::DragValue::new(&mut l.disk_gb).range(0..=10_000_000).suffix(" GiB"));
+                ui.end_row();
+                ui.label("IP addresses");
+                ui.add(egui::DragValue::new(&mut l.ips).range(0..=100_000));
+                ui.end_row();
+            });
+            ui.horizontal(|ui| {
+                save = ui.button(RichText::new("Save").strong()).clicked();
+                if ui.button("Remove limits").clicked() {
+                    *l = Default::default();
+                    save = true;
+                }
+            });
+        });
+        if save {
+            actions.0.push(super::Action::SetPoolLimits(pool.clone(), l.clone()));
+            self.limits_edit = None;
+        } else if !open {
+            self.limits_edit = None;
         }
     }
 

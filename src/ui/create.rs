@@ -61,6 +61,9 @@ pub struct CreateView {
     ha: Option<bool>,
     ha_group: String,
     key_passphrase: String,
+    custom_ci: super::guest::cloudinit::CiPicker,
+    /// Catalog entry whose custom cloud-init default was last applied.
+    custom_ci_for: Option<String>,
     node: Option<String>,
     storage: Option<String>,
     auto_vmid: bool,
@@ -126,6 +129,8 @@ impl Default for CreateView {
             ha: None,
             ha_group: String::new(),
             key_passphrase: String::new(),
+            custom_ci: Default::default(),
+            custom_ci_for: None,
             node: None,
             storage: None,
             auto_vmid: true,
@@ -626,6 +631,16 @@ impl CreateView {
                                 .hint_text("ssh-ed25519 AAAA… user@host"),
                         );
                         ui.end_row();
+                        if self.kind == GuestKind::Qemu {
+                            if self.qmode == QemuMode::Catalog && self.custom_ci_for != self.catalog_id {
+                                self.custom_ci_for = self.catalog_id.clone();
+                                let default = self.catalog_id.as_ref().and_then(|id| sh.catalog.lock().cicustom.get(id).cloned());
+                                self.custom_ci.value = crate::ops::guest::CiCustom::parse(&default.unwrap_or_default());
+                            }
+                            ui.label("Custom cloud-init");
+                            self.custom_ci.ui(ui, sh);
+                            ui.end_row();
+                        }
                         ui.label("");
                         ui.horizontal(|ui| {
                             if ui
@@ -892,6 +907,7 @@ impl CreateView {
             password: if iso_mode { String::new() } else { self.password.clone() },
             ssh_keys: if iso_mode { String::new() } else { self.sshkeys.clone() },
             ha: self.ha_choice(sh),
+            cicustom: if self.kind == GuestKind::Qemu && !iso_mode { self.custom_ci.value.value() } else { String::new() },
             pool: self.pool.clone(),
             tags: self.tags.clone(),
             description: self.description.clone(),

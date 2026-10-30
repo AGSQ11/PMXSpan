@@ -399,6 +399,27 @@ impl PveClient {
         Ok(data.as_str().unwrap_or_default().to_string())
     }
 
+    /// Streams a GET response that is not JSON (a file) into `dest`.
+    /// Returns the number of bytes written.
+    pub async fn download(&self, path: &str, params: &Params, dest: &std::path::Path) -> anyhow::Result<u64> {
+        use tokio::io::AsyncWriteExt;
+        self.ensure_ticket().await?;
+        let req = self.inner.http.get(self.url(path)).query(&params.0).timeout(Duration::from_secs(6 * 3600));
+        let req = self.authorize(req, false);
+        let mut resp = req.send().await.map_err(|e| anyhow!("GET {path}: {}", error_chain(&e)))?;
+        if !resp.status().is_success() {
+            return Err(Self::decode(resp, path).await.err().unwrap_or_else(|| anyhow!("{path}: unexpected response")));
+        }
+        let mut file = tokio::fs::File::create(dest).await.with_context(|| format!("creating {}", dest.display()))?;
+        let mut total = 0u64;
+        while let Some(chunk) = resp.chunk().await.map_err(|e| anyhow!("download interrupted: {}", error_chain(&e)))? {
+            file.write_all(&chunk).await?;
+            total += chunk.len() as u64;
+        }
+        file.flush().await?;
+        Ok(total)
+    }
+
     /// Polls a task until it stops. Returns the final status object, or an
     /// error that includes the tail of the task log when it failed - failures
     /// are never silent.
