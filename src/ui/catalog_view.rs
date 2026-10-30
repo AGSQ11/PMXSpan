@@ -52,6 +52,8 @@ pub struct CatalogView {
     draft: Option<Draft>,
     filter: String,
     import_text: Option<String>,
+    /// Parsed import awaiting confirmation.
+    import_preview: Option<Vec<CatalogEntry>>,
     export_text: Option<String>,
     probe: Fetch<String>,
     error: Option<String>,
@@ -230,7 +232,11 @@ impl CatalogView {
                         .desired_width(360.0)
                         .hint_text(if e.is_lxc() { "features: nesting=1,keyctl=1" } else { "bios: ovmf\nmachine: q35" }),
                 );
-                widgets::muted(ui, "Applied when creating or reinstalling; identity, disks and network keys are never overridden.");
+                widgets::muted(
+                    ui,
+                    "Applied when creating or reinstalling. Only CPU, memory, firmware and similar keys are accepted; \
+                     anything touching disks, network, cloud-init, host access or container privileges is rejected.",
+                );
             });
             ui.end_row();
             ui.label("Notes");
@@ -282,23 +288,70 @@ impl CatalogView {
         let Some(text) = self.import_text.as_mut() else { return };
         let mut open = true;
         let mut done = false;
-        egui::Window::new("Import catalog JSON").open(&mut open).default_width(620.0).collapsible(false).show(ctx, |ui| {
-            widgets::muted(ui, "Paste a catalog: `{\"entries\": [...]}` or a plain array. Entries with an existing id are replaced.");
-            egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
-                ui.add(egui::TextEdit::multiline(text).font(egui::TextStyle::Monospace).desired_rows(14).desired_width(f32::INFINITY));
-            });
-            if ui.button(RichText::new("Import").strong()).clicked() {
-                match catalog::parse_catalog(text).and_then(|entries| store.lock().import(entries)) {
-                    Ok((added, replaced)) => {
-                        actions.toast_ok(format!("Catalog imported: {added} added, {replaced} replaced"));
-                        done = true;
+        egui::Window::new("Import catalog JSON").open(&mut open).default_width(680.0).collapsible(false).show(ctx, |ui| {
+            let Some(entries) = self.import_preview.as_ref() else {
+                widgets::muted(ui, "Paste a catalog: `{\"entries\": [...]}` or a plain array. You review every entry before it is saved.");
+                egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
+                    ui.add(egui::TextEdit::multiline(text).font(egui::TextStyle::Monospace).desired_rows(14).desired_width(f32::INFINITY));
+                });
+                if ui.button(RichText::new("Review…").strong()).clicked() {
+                    match catalog::parse_catalog(text) {
+                        Ok(entries) => self.import_preview = Some(entries),
+                        Err(e) => actions.toast_err(format!("{e:#}")),
                     }
-                    Err(e) => actions.toast_err(format!("{e:#}")),
                 }
+                return;
+            };
+            widgets::muted(ui, "Only import catalogs from sources you trust: these images become the disks of new and reinstalled guests.");
+            let store_now = store.lock().clone();
+            egui::ScrollArea::vertical().max_height(400.0).show(ui, |ui| {
+                for e in entries {
+                    ui.add_space(4.0);
+                    let existing = store_now.existing(&e.id);
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(format!("[{}]  {}", if e.is_lxc() { "CT" } else { "VM" }, e.label)).strong());
+                        ui.label(RichText::new(&e.id).monospace().color(theme::muted()));
+                        match existing {
+                            None => ui.label(RichText::new("new").color(theme::ok())),
+                            Some(old) if old == e => ui.label(RichText::new("unchanged").color(theme::muted())),
+                            Some(_) => ui.label(RichText::new("replaces existing entry").color(theme::warn())),
+                        };
+                    });
+                    let url_changed = existing.is_some_and(|old| old.url != e.url);
+                    ui.label(RichText::new(&e.url).monospace().color(if url_changed { theme::warn() } else { theme::p().text }));
+                    if url_changed && let Some(old) = existing {
+                        ui.label(RichText::new(format!("was: {}", old.url)).monospace().small().color(theme::muted()));
+                    }
+                    if e.checksum.is_empty() {
+                        ui.label(RichText::new("no checksum: the download is not verified").small().color(theme::warn()));
+                    }
+                    if !e.config.is_empty() {
+                        let cfg = e.config.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join(", ");
+                        ui.label(RichText::new(format!("config: {cfg}")).monospace().small());
+                    }
+                    ui.separator();
+                }
+            });
+            let mut back = false;
+            ui.horizontal(|ui| {
+                if ui.button(RichText::new(format!("Import {} entries", entries.len())).strong()).clicked() {
+                    match store.lock().import(entries.clone()) {
+                        Ok((added, replaced)) => {
+                            actions.toast_ok(format!("Catalog imported: {added} added, {replaced} replaced"));
+                            done = true;
+                        }
+                        Err(e) => actions.toast_err(format!("{e:#}")),
+                    }
+                }
+                back = ui.button("Back").clicked();
+            });
+            if back {
+                self.import_preview = None;
             }
         });
         if !open || done {
             self.import_text = None;
+            self.import_preview = None;
         }
     }
 

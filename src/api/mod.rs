@@ -81,6 +81,21 @@ enum Credentials {
     Password { userid: String, password: String },
 }
 
+/// Wipes the credentials from memory when the last client clone goes away.
+impl Drop for Inner {
+    fn drop(&mut self) {
+        use zeroize::Zeroize;
+        match &mut self.creds {
+            Credentials::Token { header } => header.zeroize(),
+            Credentials::Password { password, .. } => password.zeroize(),
+        }
+        if let Some(t) = self.ticket.get_mut().as_mut() {
+            t.ticket.zeroize();
+            t.csrf.zeroize();
+        }
+    }
+}
+
 struct Inner {
     base: String,
     host: String,

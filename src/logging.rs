@@ -77,12 +77,17 @@ impl<'a> MakeWriter<'a> for RedactingWriter {
 pub fn init(paths: &AppPaths) {
     let memory = MEMORY.get_or_init(|| Arc::new(Mutex::new(VecDeque::new()))).clone();
     let day = chrono::Local::now().format("%Y-%m-%d");
-    let file = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(paths.log_dir.join(format!("pmxspan-{day}.log")))
-        .ok()
-        .map(|f| Arc::new(Mutex::new(f)));
+    let path = paths.log_dir.join(format!("pmxspan-{day}.log"));
+    let mut open = OpenOptions::new();
+    open.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+        open.mode(0o600);
+        // Logs from older versions were created with the default umask.
+        let _ = std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600));
+    }
+    let file = open.open(&path).ok().map(|f| Arc::new(Mutex::new(f)));
     prune_old_logs(paths, 14);
 
     // PXP_LOG is the variable's name from before the rename; still honoured.
@@ -105,6 +110,12 @@ fn prune_old_logs(paths: &AppPaths, keep_days: u64) {
             && meta.modified().map(|m| m < cutoff).unwrap_or(false)
         {
             let _ = std::fs::remove_file(entry.path());
+        } else {
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let _ = std::fs::set_permissions(entry.path(), std::fs::Permissions::from_mode(0o600));
+            }
         }
     }
 }

@@ -444,16 +444,15 @@ pub async fn vmid_free(client: &PveClient, vmid: u64) -> anyhow::Result<bool> {
 /// Browser console URL (noVNC for VMs, xterm.js for containers / node shell).
 pub fn console_url(client: &PveClient, g: &GuestRef, name: &str) -> String {
     let base = format!("https://{}:{}/", client.host(), client.port());
+    let (node, name) = (urlencoding::encode(&g.node), urlencoding::encode(name));
     match g.kind {
-        GuestKind::Qemu => {
-            format!("{base}?console=kvm&novnc=1&vmid={}&vmname={}&node={}&resize=off&cmd=", g.vmid, urlencoding::encode(name), g.node)
-        }
-        GuestKind::Lxc => format!("{base}?console=lxc&xtermjs=1&vmid={}&vmname={}&node={}&cmd=", g.vmid, urlencoding::encode(name), g.node),
+        GuestKind::Qemu => format!("{base}?console=kvm&novnc=1&vmid={}&vmname={name}&node={node}&resize=off&cmd=", g.vmid),
+        GuestKind::Lxc => format!("{base}?console=lxc&xtermjs=1&vmid={}&vmname={name}&node={node}&cmd=", g.vmid),
     }
 }
 
 pub fn node_shell_url(client: &PveClient, node: &str) -> String {
-    format!("https://{}:{}/?console=shell&xtermjs=1&vmid=0&node={node}&cmd=", client.host(), client.port())
+    format!("https://{}:{}/?console=shell&xtermjs=1&vmid=0&node={}&cmd=", client.host(), client.port(), urlencoding::encode(node))
 }
 
 /// Builds a SPICE `.vv` file and opens it with the system's viewer (virt-viewer).
@@ -471,16 +470,31 @@ pub async fn open_spice(client: &PveClient, g: &GuestRef) -> anyhow::Result<Stri
         };
         vv.push_str(&format!("{k}={val}\n"));
     }
-    let path = std::env::temp_dir().join(format!("pxp-spice-{}.vv", g.vmid));
-    std::fs::write(&path, vv)?;
-    open_path(&path)?;
+    // The file holds a short-lived SPICE ticket: random name, private, and
+    // removed again once the viewer has had time to read it.
+    let path = std::env::temp_dir().join(format!("pmxspan-spice-{}.vv", crate::config::new_id()));
+    {
+        use std::io::Write;
+        let mut f = crate::config::create_private(&path)?;
+        f.write_all(vv.as_bytes())?;
+    }
+    if let Err(e) = open_path(&path) {
+        let _ = std::fs::remove_file(&path);
+        return Err(e);
+    }
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_secs(60));
+        let _ = std::fs::remove_file(&path);
+    });
     Ok(format!("opened SPICE session for {} (requires virt-viewer / remote-viewer)", g.vmid))
 }
 
 pub fn open_path(path: &std::path::Path) -> anyhow::Result<()> {
     #[cfg(windows)]
     {
-        std::process::Command::new("cmd").args(["/C", "start", ""]).arg(path).spawn()?;
+        // explorer opens the file with its associated app, without cmd.exe
+        // re-parsing the path (`&`, `^` in a profile path).
+        std::process::Command::new("explorer").arg(path).spawn()?;
     }
     #[cfg(target_os = "macos")]
     {

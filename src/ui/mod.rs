@@ -73,6 +73,7 @@ pub enum Action {
     OpenCreate(Box<create::Prefill>),
     Connect(String),
     Disconnect,
+    Lock,
     ConfigChanged,
 }
 
@@ -292,6 +293,8 @@ pub struct App {
     collapsed_nodes: HashSet<String>,
     applied_theme: Option<(ThemePref, bool)>,
     applied_scale: f32,
+    /// Last keyboard or pointer input, for auto-lock.
+    last_activity: Instant,
 }
 
 impl App {
@@ -324,6 +327,7 @@ impl App {
             collapsed_nodes: HashSet::new(),
             applied_theme: None,
             applied_scale: 0.0,
+            last_activity: Instant::now(),
         };
         // An unprotected vault opens without prompting.
         if let Some(v) = app.vault.as_mut()
@@ -336,6 +340,41 @@ impl App {
 
     fn vault_ready(&self) -> bool {
         self.vault.as_ref().map(Vault::is_unlocked).unwrap_or(false)
+    }
+
+    fn vault_protected(&self) -> bool {
+        self.vault.as_ref().is_some_and(Vault::is_protected)
+    }
+
+    /// Locks a protected vault after the configured idle time. Waits for
+    /// running jobs, which still hold their own connection.
+    fn auto_lock(&mut self, ctx: &egui::Context) {
+        if ctx.input(|i| !i.events.is_empty()) {
+            self.last_activity = Instant::now();
+        }
+        let mins = self.config.settings.auto_lock_mins;
+        if mins > 0
+            && self.vault_protected()
+            && self.last_activity.elapsed() >= Duration::from_secs(mins * 60)
+            && self.jobs.running_count() == 0
+        {
+            self.lock();
+        }
+    }
+
+    /// Forgets the vault key and every connection (and the secrets they
+    /// hold); unlocking reconnects to the last server.
+    fn lock(&mut self) {
+        if let Some(v) = self.vault.as_mut() {
+            v.lock();
+        }
+        self.session = None;
+        self.connecting = None;
+        self.totp = None;
+        self.servers = Default::default();
+        self.unlock = unlock::UnlockView::new(self.vault.as_ref());
+        self.last_activity = Instant::now();
+        tracing::info!("vault locked");
     }
 
     fn save_config(&mut self) {
@@ -455,6 +494,7 @@ impl App {
                     self.session = None;
                     self.nav = Nav::Servers;
                 }
+                Action::Lock => self.lock(),
                 Action::ConfigChanged => {
                     self.save_config();
                     if let Some(s) = self.session.as_mut() {
@@ -515,6 +555,9 @@ impl App {
                     if widgets::icon_button(ui, glyph, "").on_hover_text(tip).clicked() {
                         self.config.settings.theme = if theme::is_dark() { ThemePref::Light } else { ThemePref::Dark };
                         actions.0.push(Action::ConfigChanged);
+                    }
+                    if self.vault_protected() && widgets::icon_button(ui, theme::icon::LOCK, "").on_hover_text("Lock the vault").clicked() {
+                        actions.0.push(Action::Lock);
                     }
                     let running = self.jobs.running_count();
                     let label = if running > 0 {
@@ -1000,6 +1043,11 @@ impl eframe::App for App {
             return;
         }
 
+        self.auto_lock(&ctx);
+        if !self.vault_ready() {
+            ctx.request_repaint();
+            return;
+        }
         self.pump_connecting();
         self.watch_jobs();
         let every = Duration::from_secs(self.config.settings.refresh_secs.max(2));

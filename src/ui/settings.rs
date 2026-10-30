@@ -49,6 +49,10 @@ impl SettingsView {
                 ui.label("Confirm destructive actions");
                 ui.checkbox(&mut s.confirm_destructive, "");
                 ui.end_row();
+                ui.label("Auto-lock after");
+                ui.add(egui::DragValue::new(&mut s.auto_lock_mins).range(0..=1440).suffix(" min idle"))
+                    .on_hover_text("Locks a password-protected vault and disconnects. 0 = never.");
+                ui.end_row();
 
                 ui.label(RichText::new("Provisioning").strong());
                 ui.end_row();

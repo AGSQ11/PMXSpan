@@ -71,7 +71,7 @@ impl UnlockView {
                                 Err(e) => self.error = Some(e.to_string()),
                             }
                         }
-                        self.password.clear();
+                        zeroize::Zeroize::zeroize(&mut self.password);
                     }
                     ui.add_space(8.0);
                     ui.label(RichText::new(format!("Vault: {}", paths.vault_file().display())).size(11.5).color(p.muted));
@@ -91,16 +91,18 @@ impl UnlockView {
                     }
                     ui.add_space(6.0);
                     if widgets::primary_button(ui, "Create vault").clicked() {
-                        let pw = if self.no_password { String::new() } else { self.password.clone() };
+                        let pw = zeroize::Zeroizing::new(if self.no_password { String::new() } else { self.password.clone() });
                         if !self.no_password && pw.len() < 8 {
                             self.error = Some("use at least 8 characters".into());
-                        } else if !self.no_password && pw != self.confirm {
+                        } else if !self.no_password && *pw != self.confirm {
                             self.error = Some("passwords do not match".into());
                         } else {
                             match Vault::create(&paths.vault_file(), &pw) {
                                 Ok(v) => {
                                     *vault = Some(v);
                                     done = true;
+                                    zeroize::Zeroize::zeroize(&mut self.password);
+                                    zeroize::Zeroize::zeroize(&mut self.confirm);
                                 }
                                 Err(e) => self.error = Some(format!("{e:#}")),
                             }
