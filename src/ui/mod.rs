@@ -2,6 +2,7 @@
 //! periodic cluster refresh that feeds every view.
 
 mod access;
+mod automation_view;
 mod catalog_view;
 mod charts;
 mod cluster;
@@ -51,11 +52,12 @@ pub enum Nav {
     Create,
     Servers,
     Settings,
+    Automation,
 }
 
 impl Nav {
     fn needs_session(&self) -> bool {
-        !matches!(self, Nav::Ipam | Nav::Catalog | Nav::Servers | Nav::Settings)
+        !matches!(self, Nav::Ipam | Nav::Catalog | Nav::Servers | Nav::Settings | Nav::Automation)
     }
 }
 
@@ -76,6 +78,8 @@ pub enum Action {
     Lock,
     /// Put a node of the connected server in or out of maintenance.
     SetMaintenance(String, bool),
+    /// Run a schedule now (it must belong to the connected server).
+    RunSchedule(String),
     /// Set (or clear, when unlimited) a tenant pool's limits on the connected server.
     SetPoolLimits(String, crate::config::PoolLimits),
     ConfigChanged,
@@ -299,10 +303,18 @@ pub struct App {
     applied_scale: f32,
     /// Last keyboard or pointer input, for auto-lock.
     last_activity: Instant,
+    automation: Arc<Mutex<crate::automation::AutomationStore>>,
+    automation_view: automation_view::AutomationView,
+    alerts: crate::automation::AlertMonitor,
+    /// Resource list last fed to the alert monitor (by address).
+    alerts_fed: usize,
+    last_schedule_check: Instant,
+    schedules_running: Arc<Mutex<HashSet<String>>>,
 }
 
 impl App {
     pub fn new(paths: AppPaths) -> Self {
+        let paths_automation = paths.automation_file();
         let config = AppConfig::load(&paths.config_file());
         let ipam = Arc::new(Mutex::new(IpamDb::load(&paths.ipam_file())));
         let catalog = Arc::new(Mutex::new(CatalogStore::load(&paths.catalog_file())));
@@ -332,6 +344,12 @@ impl App {
             applied_theme: None,
             applied_scale: 0.0,
             last_activity: Instant::now(),
+            automation: Arc::new(Mutex::new(crate::automation::AutomationStore::load(&paths_automation))),
+            automation_view: Default::default(),
+            alerts: Default::default(),
+            alerts_fed: 0,
+            last_schedule_check: Instant::now() - Duration::from_secs(3600),
+            schedules_running: Default::default(),
         };
         // An unprotected vault opens without prompting.
         if let Some(v) = app.vault.as_mut()
@@ -344,6 +362,72 @@ impl App {
 
     fn vault_ready(&self) -> bool {
         self.vault.as_ref().map(Vault::is_unlocked).unwrap_or(false)
+    }
+
+    /// Starts due schedules of the connected server (checked twice a minute).
+    fn run_due_schedules(&mut self) {
+        if self.last_schedule_check.elapsed() < Duration::from_secs(30) || self.session.is_none() {
+            return;
+        }
+        self.last_schedule_check = Instant::now();
+        let now = chrono::Local::now();
+        let due: Vec<_> = {
+            let mut st = self.automation.lock();
+            // `--run-schedules` may have run some meanwhile.
+            st.merge_runs_from_disk();
+            st.schedules.iter().filter(|s| s.due(now)).cloned().collect()
+        };
+        for s in due {
+            self.start_schedule(s);
+        }
+    }
+
+    fn start_schedule(&mut self, s: crate::automation::Schedule) {
+        let Some(sess) = self.session.as_ref() else { return };
+        if s.server_id != sess.shared.server_id || !self.schedules_running.lock().insert(s.id.clone()) {
+            return;
+        }
+        let started = chrono::Utc::now().timestamp();
+        {
+            // Mark it run right away so it is not started twice.
+            let mut st = self.automation.lock();
+            if let Some(x) = st.schedules.iter_mut().find(|x| x.id == s.id) {
+                x.last_run = started;
+            }
+            let _ = st.save();
+        }
+        let (c, store, running) = (sess.shared.client.clone(), self.automation.clone(), self.schedules_running.clone());
+        let title = format!("Schedule: {} of {} {}", s.action.label(), s.kind.label(), s.vmid);
+        sess.shared.spawn(title, move |ctx| async move {
+            let r = crate::ops::schedule::run(&c, &ctx, &s).await;
+            {
+                let mut st = store.lock();
+                st.record(&s.id, started, &r);
+                let _ = st.save();
+            }
+            running.lock().remove(&s.id);
+            r
+        });
+    }
+
+    /// Feeds each new resource reading to the alert monitor.
+    fn feed_alerts(&mut self) {
+        let Some(sess) = self.session.as_ref() else { return };
+        let ptr = Arc::as_ptr(&sess.shared.resources) as usize;
+        if ptr == self.alerts_fed || sess.shared.resources.is_empty() {
+            return;
+        }
+        self.alerts_fed = ptr;
+        let rules = self.automation.lock().alert_rules.clone();
+        if rules.is_empty() && self.alerts.active.is_empty() {
+            return;
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs_f64()).unwrap_or(0.0);
+        let fired = self.alerts.feed(&sess.shared.server_id, now, &sess.shared.resources, &rules);
+        for a in fired {
+            tracing::warn!("alert: {} on {} ({}) = {:.1} {}", a.rule, a.vmid, a.name, a.value, a.unit);
+            self.toast(ToastLevel::Error, format!("Alert: {} {} - {} ({:.1} {})", a.vmid, a.name, a.rule, a.value, a.unit));
+        }
     }
 
     fn vault_protected(&self) -> bool {
@@ -395,6 +479,7 @@ impl App {
         let Some(profile) = self.config.profile(profile_id).cloned() else { return };
         let secret = self.vault.as_ref().and_then(|v| v.get(&profile.secret_key())).unwrap_or_default();
         self.session = None;
+        self.alerts.reset();
         self.config.last_profile = Some(profile.id.clone());
         self.save_config();
         tracing::info!("connecting to {} ({})", profile.display_name(), profile.web_url());
@@ -499,6 +584,12 @@ impl App {
                     self.nav = Nav::Servers;
                 }
                 Action::Lock => self.lock(),
+                Action::RunSchedule(id) => {
+                    let s = self.automation.lock().schedules.iter().find(|s| s.id == id).cloned();
+                    if let Some(s) = s {
+                        self.start_schedule(s);
+                    }
+                }
                 Action::SetPoolLimits(pool, limits) => {
                     let Some(sid) = self.session.as_ref().map(|s| s.shared.server_id.clone()) else { continue };
                     if let Some(p) = self.config.profiles.iter_mut().find(|p| p.id == sid) {
@@ -573,6 +664,7 @@ impl App {
             Nav::Catalog => return ("Local".into(), "OS image catalog".into()),
             Nav::Servers => return ("Local".into(), "Servers".into()),
             Nav::Settings => return ("Local".into(), "Settings & logs".into()),
+            Nav::Automation => return ("Local".into(), "Automation".into()),
         };
         (cluster, title)
     }
@@ -600,6 +692,18 @@ impl App {
                     if widgets::icon_button(ui, glyph, "").on_hover_text(tip).clicked() {
                         self.config.settings.theme = if theme::is_dark() { ThemePref::Light } else { ThemePref::Dark };
                         actions.0.push(Action::ConfigChanged);
+                    }
+                    if !self.alerts.active.is_empty() {
+                        let n = self.alerts.active.len();
+                        let b = egui::Button::new(
+                            RichText::new(format!("{}  {n} alert{}", theme::icon::WARNING, if n == 1 { "" } else { "s" }))
+                                .color(theme::err()),
+                        )
+                        .corner_radius(egui::CornerRadius::same(9))
+                        .min_size(egui::vec2(0.0, 32.0));
+                        if ui.add(b).on_hover_text("Usage alerts firing now").clicked() {
+                            actions.nav(Nav::Automation);
+                        }
                     }
                     if self.vault_protected() && widgets::icon_button(ui, theme::icon::LOCK, "").on_hover_text("Lock the vault").clicked() {
                         actions.0.push(Action::Lock);
@@ -752,6 +856,7 @@ impl App {
                 for (glyph, label, nav) in [
                     (i::NETWORK, "IP addresses", Nav::Ipam),
                     (i::STACK, "OS image catalog", Nav::Catalog),
+                    (i::CLOCK, "Automation", Nav::Automation),
                     (i::SERVER, "Servers", Nav::Servers),
                     (i::GEAR, "Settings", Nav::Settings),
                 ] {
@@ -980,6 +1085,10 @@ impl App {
                 self.ipam_view.ui(ui, &self.ipam, &self.config, shared.as_ref(), actions);
             }
             Nav::Catalog => self.catalog_view.ui(ui, &self.catalog, actions),
+            Nav::Automation => {
+                let shared = self.session.as_ref().map(|s| s.shared.clone());
+                self.automation_view.ui(ui, &self.automation, &self.alerts, &self.config, shared.as_ref(), actions);
+            }
             nav => {
                 let Some(s) = self.session.as_mut() else { return };
                 let shared = s.shared.clone();
@@ -1010,7 +1119,7 @@ impl App {
                     Nav::Cluster => s.cluster.ui(ui, &shared, actions),
                     Nav::Access => s.access.ui(ui, &shared, actions),
                     Nav::Create => s.create.ui(ui, &shared, actions),
-                    Nav::Servers | Nav::Settings | Nav::Ipam | Nav::Catalog => {}
+                    Nav::Servers | Nav::Settings | Nav::Ipam | Nav::Catalog | Nav::Automation => {}
                 }
             }
         }
@@ -1113,6 +1222,8 @@ impl eframe::App for App {
         if let Some(s) = self.session.as_mut() {
             s.pump(every);
         }
+        self.run_due_schedules();
+        self.feed_alerts();
         ctx.request_repaint_after(every);
 
         let mut actions = Actions::default();

@@ -12,4 +12,5 @@ pub mod ipassign;
 pub mod limits;
 pub mod placement;
 pub mod rebuild;
+pub mod schedule;
 pub mod tenant;

@@ -6,7 +6,9 @@
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
 mod api;
+mod automation;
 mod config;
+mod headless;
 mod ipam;
 mod jobs;
 mod logging;
@@ -24,6 +26,10 @@ fn main() -> eframe::Result {
     let paths = config::AppPaths::resolve();
     logging::init(&paths);
     tracing::info!("PMXSpan {} starting", env!("CARGO_PKG_VERSION"));
+
+    if headless::wants_headless() {
+        std::process::exit(headless::run_schedules(&paths));
+    }
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

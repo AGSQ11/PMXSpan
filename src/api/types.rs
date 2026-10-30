@@ -70,6 +70,11 @@ pub struct Resource {
     pub content: String,
     pub shared: bool,
     pub pool: String,
+    /// Byte counters since the guest started (for traffic and I/O rates).
+    pub netin: f64,
+    pub netout: f64,
+    pub diskread: f64,
+    pub diskwrite: f64,
 }
 
 impl Resource {
@@ -96,6 +101,10 @@ impl Resource {
             content: v.s("content"),
             shared: v.b("shared"),
             pool: v.s("pool"),
+            netin: v.f("netin"),
+            netout: v.f("netout"),
+            diskread: v.f("diskread"),
+            diskwrite: v.f("diskwrite"),
         }
     }
 

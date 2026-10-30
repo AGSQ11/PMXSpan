@@ -57,6 +57,9 @@ impl AppPaths {
     pub fn catalog_file(&self) -> PathBuf {
         self.config_dir.join("catalog.json")
     }
+    pub fn automation_file(&self) -> PathBuf {
+        self.config_dir.join("automation.json")
+    }
 }
 
 /// Moves data left by the app's earlier name (ProxmoxPanel) to the new

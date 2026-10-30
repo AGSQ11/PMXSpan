@@ -53,6 +53,18 @@ pub struct JobCtx {
 }
 
 impl JobCtx {
+    /// A context for work outside the jobs panel (the headless schedule
+    /// runner); its lines still go to the log.
+    pub fn standalone(title: impl Into<String>) -> Self {
+        let job = Arc::new(Job {
+            id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+            title: title.into(),
+            started: chrono::Local::now(),
+            state: Mutex::new(JobState { status: JobStatus::Running, lines: Vec::new(), progress: None, result: None, finished: None }),
+        });
+        Self { job }
+    }
+
     fn push(&self, level: Level, text: impl Into<String>) {
         let text = crate::util::redact(&text.into());
         match level {
