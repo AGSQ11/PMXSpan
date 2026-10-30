@@ -23,7 +23,7 @@ PMXSpan is a standalone desktop app for managing Proxmox VE clusters, written in
 | **Dashboard** | Nodes, running guests, CPU and memory at a glance; a guest table with each guest's main IP; per-node usage, recent tasks and storage usage. |
 | **Guests** | Sortable, filterable list with quick power actions, plus a navigation tree per node. |
 | **Guest detail** | Summary (live status, agent/LXC IP addresses, traffic for the billing period, RRD graphs). Hardware (CPU/memory/options/tags/notes, disk resize/move/add/detach, ISO insert/eject, boot order, raw config). Network (bridge/VLAN/rate/firewall/MAC, LXC addressing). **IP addresses** (see below). Cloud-Init. Snapshots. Backups (back up/restore/protect/delete). Firewall (options, rules, reorder, log). Guest agent (OS/filesystems, set password, run commands). Task history. Manage (password reset, migrate, clone, **rebuild**, HA, pool, template, clear lock, destroy). |
-| **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local), from an **OS catalog image**, or from an ISO, and containers from a `vztmpl` on storage or from the catalog. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. |
+| **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local), from an **OS catalog image**, or from an ISO, and containers from a `vztmpl` on storage or from the catalog. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. New guests get the `PMXSpan` tag (configurable in Settings) so you can find them in Proxmox. |
 | **Auto-placement** | Nodes without enough free RAM are skipped. Each remaining node's storage is filtered by content type and free space. The survivors are ordered by your RAM/CPU/Disk priority and picked *dense*, *sparse* or *random*. |
 | **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. |
 | **IP assignment** | Per guest, per interface: assign one or more IPv4/IPv6 addresses from a pool (or an exact one), release them, pick the **main** address of each family, add an interface together with its addresses, remove one (its addresses are released), and adopt addresses already in a guest's config. The main addresses go into the guest config (LXC `netN`, VM cloud-init `ipconfigN`, the pool's VLAN on the NIC); additional ones are configured inside the guest. The **anti-spoofing IP filter** keeps an `ipfilter-netN` ipset per interface in sync with the assigned addresses. |
@@ -130,11 +130,13 @@ Stale create locks are cleared with **Manage → Clear lock**. It uses the API's
 | **Windows 10/11 (x64)** | `PMXSpan-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn when the installer isn't code-signed: click *More info → Run anyway*. (Builds are signed when `packaging/build-installers.sh` runs with `SIGN_PFX` set.) |
 | Windows, no install | `pmxspan-<ver>-windows-x86_64-portable.zip` | Unzip and run `pmxspan.exe`. |
 | **Debian / Ubuntu / Mint** | `pmxspan_<ver>_amd64.deb` | `sudo apt install ./pmxspan_<ver>_amd64.deb` (use `apt`, not `dpkg -i`, so dependencies are pulled in). Then launch *PMXSpan* from the app menu or run `pmxspan`. |
+| **Any Linux (x86_64)** | `PMXSpan-<ver>-x86_64.AppImage` | `chmod +x PMXSpan-<ver>-x86_64.AppImage` and run it. Needs FUSE 2 (`libfuse2`); without it, run it with `--appimage-extract-and-run`. |
 | Other Linux | `pmxspan-<ver>-linux-x86_64.tar.gz` | Extract and run `./pmxspan`. |
+| **macOS 11+ (Apple silicon and Intel)** | `PMXSpan-<ver>-macos-universal.dmg` | Open it and drag *PMXSpan* to *Applications*. The app isn't notarized: the first time, right-click it and choose *Open*. |
 
-Uninstalling keeps your data (servers, encrypted vault, IPAM database). See *Data locations* below to remove it too.
+The Linux builds need glibc 2.31 or newer (Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora 32+). Uninstalling keeps your data (servers, encrypted vault, IPAM database). See *Data locations* below to remove it too.
 
-To build all installers yourself: `packaging/build-installers.sh` (Linux host; the Windows setup is cross-compiled and needs `mingw-w64`, `nsis` and `rustup target add x86_64-pc-windows-gnu`). CI also builds them on every push to `main`; download them from the workflow run's artifacts.
+Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed, and attached to the GitHub release with a `SHA256SUMS.txt`. To build the Linux and Windows packages yourself: `packaging/build-installers.sh` (Linux host; the Windows setup is cross-compiled and needs `mingw-w64`, `nsis` and `rustup target add x86_64-pc-windows-gnu`; with `zig` and `cargo-zigbuild` installed the Linux builds target glibc 2.31). The macOS app is built on a Mac with `packaging/macos/build-app.sh`.
 
 ## Build from source
 
@@ -144,7 +146,7 @@ You need Rust 1.88 or newer (`rustup` recommended).
 cargo build --release
 ```
 
-The binary is `target/release/pmxspan` (`pmxspan.exe` on Windows). It is a single self-contained executable.
+The binary is `target/release/pmxspan` (`pmxspan.exe` on Windows). It is a single self-contained executable. On macOS it runs as-is; `packaging/macos/build-app.sh` wraps it into an `.app` and `.dmg`.
 
 - **Linux runtime:** needs an X11 or Wayland desktop with OpenGL or Vulkan (on Debian/Ubuntu: `libxkbcommon-x11-0 libgl1`), and `xdg-desktop-portal` for file pickers. SPICE needs `virt-viewer`.
 - **Windows:** build natively with the MSVC toolchain, or cross-compile from Linux:

@@ -1,13 +1,13 @@
 ; PMXSpan Windows installer (NSIS 3).
 ;
-; Build:  makensis -DVERSION=0.4.0 -DEXE=path\to\pmxspan.exe -DOUTFILE=PMXSpan-Setup.exe packaging\windows\installer.nsi
+; Build:  makensis -DVERSION=0.5.0 -DEXE=path\to\pmxspan.exe -DOUTFILE=PMXSpan-Setup.exe packaging\windows\installer.nsi
 ; (packaging/build-installers.sh does this for you.)
 
 Unicode true
 SetCompressor /SOLID lzma
 
 !ifndef VERSION
-  !define VERSION "0.4.0"
+  !define VERSION "0.5.0"
 !endif
 !ifndef EXE
   !define EXE "..\..\target\release\pmxspan.exe"

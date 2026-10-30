@@ -406,11 +406,10 @@ fn description(spec: &CreateSpec, settings: &Settings) -> String {
 
 fn tags(spec: &CreateSpec, settings: &Settings) -> String {
     let mut t: Vec<String> = spec.tags.split([',', ';', ' ']).filter(|s| !s.is_empty()).map(|s| s.to_ascii_lowercase()).collect();
-    if settings.tag_managed_guests && !settings.managed_tag.trim().is_empty() {
-        let mt = settings.managed_tag.trim().to_ascii_lowercase();
-        if !t.contains(&mt) {
-            t.push(mt);
-        }
+    // The managed tag keeps its case (`PMXSpan`); Proxmox tags allow it.
+    let mt = settings.managed_tag.trim();
+    if settings.tag_managed_guests && !mt.is_empty() && !t.iter().any(|x| x.eq_ignore_ascii_case(mt)) {
+        t.push(mt.to_string());
     }
     t.join(";")
 }
@@ -931,6 +930,16 @@ mod tests {
         );
         assert_eq!(qemu_net_line(&net, "BC:24:11:00:00:01"), "virtio=BC:24:11:00:00:01,bridge=vmbr0,firewall=1,tag=20,rate=12.500");
         assert_eq!(ipconfig_line(&ips), "ip=192.0.2.5/24,gw=192.0.2.1,ip6=auto");
+    }
+
+    #[test]
+    fn managed_tag_keeps_its_case() {
+        let mut spec = CreateSpec::default();
+        let settings = Settings::default();
+        spec.tags = "Web, prod".into();
+        assert_eq!(tags(&spec, &settings), "web;prod;PMXSpan");
+        spec.tags = "pmxspan".into();
+        assert_eq!(tags(&spec, &settings), "pmxspan", "no duplicate in another case");
     }
 
     #[test]

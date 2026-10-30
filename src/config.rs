@@ -220,6 +220,9 @@ pub enum ThemePref {
     System,
 }
 
+/// Tag added to guests created by the app.
+pub const DEFAULT_MANAGED_TAG: &str = "PMXSpan";
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -268,7 +271,7 @@ impl Default for Settings {
             ui_scale: 1.0,
             task_timeout_secs: 3600,
             tag_managed_guests: true,
-            managed_tag: "pmxspan".into(),
+            managed_tag: DEFAULT_MANAGED_TAG.into(),
             download_stall_secs: 180,
             download_max_wait_secs: 1800,
             download_min_bytes: 0,
@@ -286,13 +289,24 @@ pub struct AppConfig {
 
 impl AppConfig {
     pub fn load(path: &Path) -> Self {
-        match std::fs::read_to_string(path) {
+        let mut c: Self = match std::fs::read_to_string(path) {
             Ok(s) => serde_json::from_str(&s).unwrap_or_else(|e| {
                 tracing::error!("config file is invalid, starting with defaults: {e}");
                 let _ = std::fs::copy(path, path.with_extension("json.bak"));
                 Self::default()
             }),
             Err(_) => Self::default(),
+        };
+        c.migrate();
+        c
+    }
+
+    /// Earlier versions saved their default tag (`proxmoxpanel`, then
+    /// `pmxspan`); move those to the current one. A custom tag is kept.
+    fn migrate(&mut self) {
+        let tag = &mut self.settings.managed_tag;
+        if ["proxmoxpanel", "pmxspan"].iter().any(|old| tag.trim().eq_ignore_ascii_case(old)) {
+            *tag = DEFAULT_MANAGED_TAG.into();
         }
     }
 
@@ -381,6 +395,19 @@ mod tests {
         assert_eq!(std::fs::read(new.join("vault.json")).unwrap(), b"secret");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn old_default_tags_are_migrated() {
+        let dir = std::env::temp_dir().join(format!("pmxspan-cfg-{}", super::new_id()));
+        let path = dir.join("config.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        for (saved, want) in [("proxmoxpanel", "PMXSpan"), ("pmxspan", "PMXSpan"), ("customer-x", "customer-x")] {
+            std::fs::write(&path, format!(r#"{{"settings": {{"managed_tag": "{saved}"}}}}"#)).unwrap();
+            assert_eq!(super::AppConfig::load(&path).settings.managed_tag, want);
+        }
+        assert_eq!(super::AppConfig::load(&dir.join("missing.json")).settings.managed_tag, "PMXSpan");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
