@@ -140,7 +140,7 @@ impl IpamView {
                 ui.label("reading guest configs…");
             }
         });
-        let Some(Ok(nets)) = self.drift.poll().map(|r| r.as_ref().map(Clone::clone)) else {
+        let Some(Ok(nets)) = self.drift.poll().cloned() else {
             if let Some(Err(e)) = self.drift.poll() {
                 widgets::error_box(ui, e);
             }

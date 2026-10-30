@@ -981,22 +981,22 @@ impl App {
                 3.5,
                 if maint { theme::warn() } else { theme::status_color(&n.status) },
             );
-            if maint {
-                painter.text(
-                    egui::pos2(rect.right() - 8.0, rect.center().y),
-                    egui::Align2::RIGHT_CENTER,
-                    theme::icon::WRENCH,
-                    egui::FontId::proportional(12.0),
-                    theme::warn(),
-                );
-            }
-            painter.text(
+            let name = painter.text(
                 egui::pos2(rect.left() + 38.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,
                 &n.node,
                 egui::FontId::new(13.5, theme::semibold()),
                 p.text,
             );
+            if maint {
+                painter.text(
+                    egui::pos2(name.right() + 7.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    theme::icon::WRENCH,
+                    egui::FontId::proportional(12.0),
+                    theme::warn(),
+                );
+            }
             painter.text(
                 egui::pos2(rect.right() - 8.0, rect.center().y),
                 egui::Align2::RIGHT_CENTER,

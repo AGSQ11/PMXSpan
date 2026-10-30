@@ -274,18 +274,21 @@ impl CatalogView {
         ui.horizontal(|ui| {
             if ui.button(RichText::new("Save image").strong()).clicked() {
                 match d.build() {
-                    Ok(entry) => match {
-                        let mut st = store.lock();
-                        st.upsert(d.original.as_deref(), entry.clone())
-                            .and_then(|()| st.set_cicustom(d.original.as_deref(), &entry.id, &d.cicustom))
-                    } {
-                        Ok(()) => {
-                            actions.toast_ok(format!("Saved '{}'", entry.label));
-                            *d = Draft::from_entry(&entry, &store.lock());
-                            self.error = None;
+                    Ok(entry) => {
+                        let saved = {
+                            let mut st = store.lock();
+                            st.upsert(d.original.as_deref(), entry.clone())
+                                .and_then(|()| st.set_cicustom(d.original.as_deref(), &entry.id, &d.cicustom))
+                        };
+                        match saved {
+                            Ok(()) => {
+                                actions.toast_ok(format!("Saved '{}'", entry.label));
+                                *d = Draft::from_entry(&entry, &store.lock());
+                                self.error = None;
+                            }
+                            Err(err) => self.error = Some(format!("{err:#}")),
                         }
-                        Err(err) => self.error = Some(format!("{err:#}")),
-                    },
+                    }
                     Err(err) => self.error = Some(format!("{err:#}")),
                 }
             }

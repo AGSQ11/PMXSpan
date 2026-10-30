@@ -15,6 +15,8 @@ and is lost on exit. Write operations return UPIDs whose tasks finish after
 """
 
 import argparse
+import base64
+import io
 import json
 import os
 import random
@@ -24,6 +26,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -39,6 +42,7 @@ STORAGES = {
     "local": {"type": "dir", "content": "iso,vztmpl,backup,snippets,import", "shared": 0, "total": 100 * 2**30, "used": 22 * 2**30},
     "local-lvm": {"type": "lvmthin", "content": "images,rootdir", "shared": 0, "total": 900 * 2**30, "used": 310 * 2**30},
     "ceph": {"type": "rbd", "content": "images,rootdir", "shared": 1, "total": 4000 * 2**30, "used": 1200 * 2**30},
+    "pbs": {"type": "pbs", "content": "backup", "shared": 1, "total": 8000 * 2**30, "used": 2100 * 2**30},
 }
 
 CONTENT = {
@@ -97,16 +101,81 @@ add_guest("lxc", 102, "pve2", "dns01", "running", cores=1, mem_mb=512, disk_gb=8
 add_guest("lxc", 103, "pve2", "staging", "stopped", tags="test")
 add_guest("qemu", 9000, "pve1", "debian-12-cloud", template=1, disk_gb=3)
 add_guest("qemu", 9001, "pve2", "ubuntu-24.04-cloud", template=1, disk_gb=4)
+# A few static addresses (the rest use DHCP), for IPAM drift.
+GUESTS[101]["cfg"]["ipconfig0"] = "ip=10.20.0.21/24,gw=10.20.0.1"
+GUESTS[102]["cfg"]["net0"] = GUESTS[102]["cfg"]["net0"].replace("ip=dhcp", "ip=10.20.0.53/24,gw=10.20.0.1")
+GUESTS[103]["cfg"]["tags"] = "test;PMXSpan"
 SNAPSHOTS[100] = [{"name": "before_upgrade", "description": "pre apt upgrade", "snaptime": NOW() - 86400 * 3}]
 FIREWALL[100]["rules"] = [
     {"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1, "macro": "SSH", "comment": "admin ssh"},
     {"pos": 1, "type": "in", "action": "ACCEPT", "enable": 1, "proto": "tcp", "dport": "80,443", "comment": "web"},
 ]
+CONTENT["local"] += [
+    {"volid": "local:snippets/web-user.yml", "content": "snippets", "format": "snippet", "size": 812},
+    {"volid": "local:snippets/vendor-base.yml", "content": "snippets", "format": "snippet", "size": 344},
+    {"volid": "local:snippets/net-static.yml", "content": "snippets", "format": "snippet", "size": 290},
+]
+CONTENT["pbs"] = [
+    {"volid": "pbs:backup/vm/100/2026-10-29T02:00:04Z", "content": "backup", "format": "pbs-vm", "size": 21 * 2**30,
+     "vmid": 100, "ctime": NOW() - 86400, "notes": "web01 nightly (PBS)"},
+    {"volid": "pbs:backup/vm/101/2026-10-29T02:10:11Z", "content": "backup", "format": "pbs-vm", "size": 64 * 2**30,
+     "vmid": 101, "ctime": NOW() - 86400 + 600, "notes": "db01 nightly (PBS)"},
+    {"volid": "pbs:backup/ct/102/2026-10-29T02:20:00Z", "content": "backup", "format": "pbs-ct", "size": 2 * 2**30,
+     "vmid": 102, "ctime": NOW() - 86400 + 1200, "notes": "dns01 nightly (PBS)"},
+]
+# Files inside PBS snapshots, for single-file restore: path -> [(name, type, size)].
+_ROOT = "/drive-scsi0.img.fidx/part/1"
+FILE_TREE = {
+    "/": [("drive-scsi0.img.fidx", "v", None), ("qemu-server.conf.blob", "f", 612)],
+    "/drive-scsi0.img.fidx": [("part", "v", None)],
+    "/drive-scsi0.img.fidx/part": [("1", "v", None)],
+    _ROOT: [("etc", "d", None), ("home", "d", None), ("var", "d", None)],
+    _ROOT + "/etc": [("fstab", "f", 412), ("hostname", "f", 6), ("nginx", "d", None)],
+    _ROOT + "/etc/nginx": [("nginx.conf", "f", 1490), ("sites-enabled", "d", None)],
+    _ROOT + "/etc/nginx/sites-enabled": [("default", "f", 2412)],
+    _ROOT + "/home": [("debian", "d", None)],
+    _ROOT + "/home/debian": [(".bashrc", "f", 3526), (".profile", "f", 807)],
+    _ROOT + "/var": [("www", "d", None)],
+    _ROOT + "/var/www": [("index.html", "f", 612)],
+}
+
+
+class Raw:
+    """A non-JSON response body (file downloads)."""
+
+    def __init__(self, data, ctype="application/octet-stream"):
+        self.data, self.ctype = data, ctype
+
+
+def b64(path):
+    return base64.b64encode(path.encode()).decode()
+
+
+def unb64(path):
+    return path if path == "/" else base64.b64decode(path).decode()
+
+
 CONTENT["local"].append({"volid": "local:backup/vzdump-qemu-100-2026_10_01-02_00_01.vma.zst", "content": "backup",
                          "format": "vma.zst", "size": 3 * 2**30, "vmid": 100, "ctime": NOW() - 86400 * 2,
                          "notes": "web01 nightly"})
 BACKUP_JOBS.append({"id": "backup-6f1c1d2a-01", "schedule": "02:00", "storage": "local", "vmid": "100,101",
                     "mode": "snapshot", "compress": "zstd", "enabled": 1, "prune-backups": "keep-last=3"})
+
+
+COUNTERS = {}
+
+
+def counters(vmid, running):
+    """Byte counters that grow like real traffic (db01 writes a lot)."""
+    if not running:
+        COUNTERS.pop(vmid, None)
+        return {"netin": 0, "netout": 0, "diskread": 0, "diskwrite": 0}
+    c = COUNTERS.setdefault(vmid, {"netin": 0, "netout": 0, "diskread": 0, "diskwrite": 0, "t": time.time()})
+    dt, c["t"] = time.time() - c["t"], time.time()
+    busy = 40e6 if vmid == 101 else 0
+    for k, rate in (("netin", 2e5), ("netout", 6e5), ("diskread", 1e6), ("diskwrite", 3e5 + busy)):
+        c[k] += int(dt * rate * random.uniform(0.6, 1.4))
+    return {k: v for k, v in c.items() if k != "t"}
 
 
 def new_task(node, ttype, vid, ok=True, duration=1.5, log=None):
@@ -156,6 +225,7 @@ def resources():
                     "mem": int(maxmem * random.uniform(0.3, 0.7)) if running else 0, "maxmem": maxmem,
                     "disk": 0, "maxdisk": int(size.group(1)) * 2**30 if size else 0,
                     "uptime": NOW() - g["started"] if running else 0, "tags": c.get("tags", ""), "pool": g["pool"],
+                    **counters(vmid, running),
                     "lock": c.get("lock", ""), "hastate": next((h["state"] for h in HA if h["sid"].endswith(f":{vmid}")), "")})
     for p in POOLS:
         out.append({"id": f"pool/{p['poolid']}", "type": "pool", "pool": p["poolid"]})
@@ -256,6 +326,13 @@ class Handler(BaseHTTPRequestHandler):
                 return self.reply(None, 400, f"Parameter verification failed. {e}")
         if res is NotImplemented:
             return self.reply([] if method == "GET" else None)
+        if isinstance(res, Raw):
+            self.send_response(200)
+            self.send_header("Content-Type", res.ctype)
+            self.send_header("Content-Length", str(len(res.data)))
+            self.end_headers()
+            self.wfile.write(res.data)
+            return None
         return self.reply(res)
 
     def dispatch(self, method, p, a):
@@ -377,6 +454,29 @@ class Handler(BaseHTTPRequestHandler):
                 out.append({"storage": s, "type": d["type"], "content": d["content"], "active": 1, "enabled": 1, "shared": d["shared"],
                             "total": d["total"], "used": d["used"], "avail": d["total"] - d["used"]})
             return out
+        fr = re.fullmatch(r"/storage/([^/]+)/file-restore/(list|download)", rest)
+        if fr:
+            if not a.get("volume", "").startswith("pbs:"):
+                raise ValueError("volume: only PBS snapshots are supported")
+            path = unb64(a.get("filepath", "/")).rstrip("/") or "/"
+            if fr.group(2) == "list":
+                if path not in FILE_TREE:
+                    raise KeyError(path)
+                prefix = "" if path == "/" else path
+                return [{"filepath": b64(f"{prefix}/{n}"), "text": n, "type": t, "leaf": int(t == "f"),
+                         **({"size": sz} if sz else {}), "mtime": NOW() - 86400 * 30} for n, t, sz in FILE_TREE[path]]
+            if path in FILE_TREE:
+                buf = io.BytesIO()
+                with zipfile.ZipFile(buf, "w") as z:
+                    def walk(d, rel):
+                        for n, t, _ in FILE_TREE.get(d, []):
+                            if t == "f":
+                                z.writestr(f"{rel}{n}", f"mock content of {d}/{n}\n")
+                            else:
+                                walk(f"{d}/{n}", f"{rel}{n}/")
+                    walk(path, path.rsplit("/", 1)[-1] + "/")
+                return Raw(buf.getvalue(), "application/zip")
+            return Raw(f"mock content of {path}\n".encode())
         sm = re.fullmatch(r"/storage/([^/]+)/(content|upload|download-url)(/.*)?", rest)
         if sm:
             st, what, vol = sm.group(1), sm.group(2), (sm.group(3) or "")[1:]

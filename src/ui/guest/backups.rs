@@ -237,9 +237,14 @@ impl BackupsTab {
         let mut go: Option<usize> = None;
         let mut enter: Option<(String, String)> = None;
         let mut download: Option<RestoreEntry> = None;
-        egui::Window::new(format!("Files in backup {}", b.title)).open(&mut open).default_size([640.0, 460.0]).collapsible(false).show(
-            ctx,
-            |ui| {
+        let center = ctx.content_rect().center();
+        egui::Window::new(format!("Files in backup {}", b.title))
+            .open(&mut open)
+            .pivot(egui::Align2::CENTER_TOP)
+            .default_pos([center.x, 90.0])
+            .min_width(620.0)
+            .collapsible(false)
+            .show(ctx, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     for (i, (label, _)) in b.stack.iter().enumerate() {
                         if i > 0 {
@@ -286,8 +291,7 @@ impl BackupsTab {
                         });
                     });
                 });
-            },
-        );
+            });
         if let Some(i) = go {
             b.stack.truncate(i + 1);
             b.list = Fetch::default();

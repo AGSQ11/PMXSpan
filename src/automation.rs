@@ -53,6 +53,8 @@ impl When {
             When::EveryHours(1) => "every hour".into(),
             When::EveryHours(h) => format!("every {h} hours"),
             When::Daily { at, days } if days.is_empty() || days.len() == 7 => format!("daily at {at}"),
+            When::Daily { at, days } if days[..] == [0, 1, 2, 3, 4] => format!("weekdays at {at}"),
+            When::Daily { at, days } if days[..] == [5, 6] => format!("weekends at {at}"),
             When::Daily { at, days } => {
                 const N: [&str; 7] = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
                 let d: Vec<&str> = days.iter().filter_map(|d| N.get(*d as usize).copied()).collect();
@@ -236,7 +238,10 @@ impl Default for AlertRule {
 
 impl AlertRule {
     pub fn label(&self) -> String {
-        format!("{} above {}{} for {} min", self.metric.label(), self.threshold, self.metric.unit(), self.minutes)
+        let unit = self.metric.unit();
+        let sep = if unit == "%" { "" } else { " " };
+        let held = if self.minutes == 0 { String::new() } else { format!(" for {} min", self.minutes) };
+        format!("{} above {}{sep}{unit}{held}", self.metric.label(), self.threshold)
     }
 }
 
@@ -289,7 +294,7 @@ impl AutomationStore {
 
 /// Snapshot name for an automatic snapshot taken at `at`.
 pub fn auto_snapshot_name(at: DateTime<Local>) -> String {
-    format!("auto-{}", at.format("%Y%m%d-%H%M"))
+    format!("auto-{}", at.format("%Y%m%d-%H%M%S"))
 }
 
 /// Live usage of one guest, from two consecutive resource readings.
@@ -476,7 +481,7 @@ mod tests {
         s.last_run = at("2026-11-02 16:01").timestamp();
         assert!(!s.due(at("2026-11-02 21:00")));
         assert!(s.due(at("2026-11-02 22:02")));
-        assert_eq!(auto_snapshot_name(at("2026-11-02 22:02")), "auto-20261102-2202");
+        assert_eq!(auto_snapshot_name(at("2026-11-02 22:02")), "auto-20261102-220200");
         assert!(Schedule { vmid: 100, server_id: "s".into(), when: When::EveryHours(0), ..s.clone() }.validate().is_err());
         assert!(Schedule { vmid: 100, server_id: "s".into(), ..s }.validate().is_ok());
     }

@@ -372,37 +372,45 @@ impl AccessView {
         let Some((pool, l)) = self.limits_edit.as_mut() else { return };
         let mut open = true;
         let mut save = false;
-        egui::Window::new(format!("Limits of pool {pool}")).open(&mut open).collapsible(false).resizable(false).show(ctx, |ui| {
-            widgets::muted(
-                ui,
-                "Enforced by PMXSpan when it creates a guest in this pool, assigns addresses to one of its guests or moves a guest \
+        let center = ctx.content_rect().center();
+        egui::Window::new(format!("Limits of pool {pool}"))
+            .open(&mut open)
+            .pivot(egui::Align2::CENTER_TOP)
+            .default_pos([center.x, 250.0])
+            .min_width(460.0)
+            .collapsible(false)
+            .resizable(false)
+            .show(ctx, |ui| {
+                widgets::muted(
+                    ui,
+                    "Enforced by PMXSpan when it creates a guest in this pool, assigns addresses to one of its guests or moves a guest \
                  into it. 0 = unlimited. Disk counts each guest's root disk.",
-            );
-            egui::Grid::new("pool-limits").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-                ui.label("Guests");
-                ui.add(egui::DragValue::new(&mut l.guests).range(0..=100_000));
-                ui.end_row();
-                ui.label("vCPUs");
-                ui.add(egui::DragValue::new(&mut l.cores).range(0..=100_000));
-                ui.end_row();
-                ui.label("Memory");
-                ui.add(egui::DragValue::new(&mut l.memory_mb).range(0..=100_000_000).speed(256).suffix(" MiB"));
-                ui.end_row();
-                ui.label("Disk");
-                ui.add(egui::DragValue::new(&mut l.disk_gb).range(0..=10_000_000).suffix(" GiB"));
-                ui.end_row();
-                ui.label("IP addresses");
-                ui.add(egui::DragValue::new(&mut l.ips).range(0..=100_000));
-                ui.end_row();
+                );
+                egui::Grid::new("pool-limits").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+                    ui.label("Guests");
+                    ui.add(egui::DragValue::new(&mut l.guests).range(0..=100_000));
+                    ui.end_row();
+                    ui.label("vCPUs");
+                    ui.add(egui::DragValue::new(&mut l.cores).range(0..=100_000));
+                    ui.end_row();
+                    ui.label("Memory");
+                    ui.add(egui::DragValue::new(&mut l.memory_mb).range(0..=100_000_000).speed(256).suffix(" MiB"));
+                    ui.end_row();
+                    ui.label("Disk");
+                    ui.add(egui::DragValue::new(&mut l.disk_gb).range(0..=10_000_000).suffix(" GiB"));
+                    ui.end_row();
+                    ui.label("IP addresses");
+                    ui.add(egui::DragValue::new(&mut l.ips).range(0..=100_000));
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    save = ui.button(RichText::new("Save").strong()).clicked();
+                    if ui.button("Remove limits").clicked() {
+                        *l = Default::default();
+                        save = true;
+                    }
+                });
             });
-            ui.horizontal(|ui| {
-                save = ui.button(RichText::new("Save").strong()).clicked();
-                if ui.button("Remove limits").clicked() {
-                    *l = Default::default();
-                    save = true;
-                }
-            });
-        });
         if save {
             actions.0.push(super::Action::SetPoolLimits(pool.clone(), l.clone()));
             self.limits_edit = None;

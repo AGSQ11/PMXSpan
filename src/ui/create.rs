@@ -631,16 +631,6 @@ impl CreateView {
                                 .hint_text("ssh-ed25519 AAAA… user@host"),
                         );
                         ui.end_row();
-                        if self.kind == GuestKind::Qemu {
-                            if self.qmode == QemuMode::Catalog && self.custom_ci_for != self.catalog_id {
-                                self.custom_ci_for = self.catalog_id.clone();
-                                let default = self.catalog_id.as_ref().and_then(|id| sh.catalog.lock().cicustom.get(id).cloned());
-                                self.custom_ci.value = crate::ops::guest::CiCustom::parse(&default.unwrap_or_default());
-                            }
-                            ui.label("Custom cloud-init");
-                            self.custom_ci.ui(ui, sh);
-                            ui.end_row();
-                        }
                         ui.label("");
                         ui.horizontal(|ui| {
                             if ui
@@ -660,6 +650,16 @@ impl CreateView {
                             );
                         });
                         ui.end_row();
+                        if self.kind == GuestKind::Qemu {
+                            if self.qmode == QemuMode::Catalog && self.custom_ci_for != self.catalog_id {
+                                self.custom_ci_for = self.catalog_id.clone();
+                                let default = self.catalog_id.as_ref().and_then(|id| sh.catalog.lock().cicustom.get(id).cloned());
+                                self.custom_ci.value = crate::ops::guest::CiCustom::parse(&default.unwrap_or_default());
+                            }
+                            ui.label("Custom cloud-init");
+                            self.custom_ci.ui(ui, sh);
+                            ui.end_row();
+                        }
                     }
                 });
             });

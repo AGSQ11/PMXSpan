@@ -25,19 +25,25 @@ PMXSpan is a standalone desktop app for managing Proxmox VE clusters, written in
 | **Guest detail** | Summary (live status, agent/LXC IP addresses, traffic for the billing period, RRD graphs). Hardware (CPU/memory/options/tags/notes, disk resize/move/add/detach, ISO insert/eject, boot order, raw config). Network (bridge/VLAN/rate/firewall/MAC, LXC addressing). **IP addresses** (see below). Cloud-Init. Snapshots. Backups (back up/restore/protect/delete). Firewall (options, rules, reorder, log). Guest agent (OS/filesystems, set password, run commands). Task history. Manage (password reset, migrate, clone, **rebuild**, HA, pool, template, clear lock, destroy). |
 | **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local), from an **OS catalog image**, or from an ISO, and containers from a `vztmpl` on storage or from the catalog. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. New guests get the `PMXSpan` tag (configurable in Settings) so you can find them in Proxmox. |
 | **Auto-placement** | Nodes without enough free RAM are skipped. Each remaining node's storage is filtered by content type and free space. The survivors are ordered by your RAM/CPU/Disk priority and picked *dense*, *sparse* or *random*. |
-| **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. |
+| **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. Every change is kept in a **history** (assigned, adopted, released, made main, reserved), and a **drift** view compares IPAM with the cluster: addresses kept for guests that are gone, static addresses IPAM does not know, main addresses that differ, and app-created guests without a record, each with a one-click fix. |
 | **IP assignment** | Per guest, per interface: assign one or more IPv4/IPv6 addresses from a pool (or an exact one), release them, pick the **main** address of each family, add an interface together with its addresses, remove one (its addresses are released), and adopt addresses already in a guest's config. The main addresses go into the guest config (LXC `netN`, VM cloud-init `ipconfigN`, the pool's VLAN on the NIC); additional ones are configured inside the guest. The **anti-spoofing IP filter** keeps an `ipfilter-netN` ipset per interface in sync with the assigned addresses. |
 | **OS image catalog** | Images for creating and reinstalling guests from a URL instead of a template: VM disk images (qcow2/raw/vmdk/ova, imported with `import-from`) and container templates. Catalogs import and export as JSON (`{"entries": [...]}` or an array with `id`, `label`, `virt`, `url`, `checksum`, `checksum_algorithm`, `cloud_user`, `ostype`, `nodes`, `config`/`tpl_data`, `image_format`). Images are downloaded to the per-server main or fallback storage with stall detection; permanent errors (404/403) fail at once, transient ones are retried, and a full or broken storage moves on to the next one. The downloaded file is always removed afterwards. |
-| **Rebuild / reinstall** | Replaces a guest's disks with a fresh template **or catalog image** while keeping its VMID, name, resources, NICs (**MAC addresses**), IP addresses, firewall rules/ipsets and pool. A catalog image is downloaded and the firewall config read *before* anything is deleted, so a failed download leaves the guest untouched. If the firewall can't be fully restored, the guest is left stopped instead of starting unprotected. You confirm by typing the VMID. |
+| **Rebuild / reinstall** | Replaces a guest's disks with a fresh template **or catalog image** while keeping its VMID, name, resources, NICs (**MAC addresses**), IP addresses, firewall rules/ipsets and pool. A catalog image is downloaded and the firewall config read *before* anything is deleted, so a failed download leaves the guest untouched. If the firewall can't be fully restored, the guest is left stopped instead of starting unprotected. You confirm by typing the VMID. Optionally (and by default) the guest is **backed up first**. |
 | **Storage** | Browse content, upload ISOs/templates with progress, download from a URL (with optional checksum), browse and download appliance templates, delete volumes. |
 | **Datacenter** | Scheduled backup jobs (create/toggle/run now/delete), storage replication, HA resources and HA status. |
 | **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a new `@pve` (or directory-realm) user with a role on `/pool/<pool>` only, so customers see nothing outside their pool. Existing accounts are never modified. |
 | **Jobs** | Every multi-step operation runs in the background and logs each step and the exact error it stopped on, including the tail of the Proxmox task log. No silent failures. |
+| **Backups** | Back up now, restore (also another guest's backup over this one), protect and delete. For **Proxmox Backup Server** snapshots, browse the files inside and download single files or whole folders (zip / tar.zst). |
+| **Automation** | Per-guest **snapshot schedules** with retention (every N hours, or daily / on chosen weekdays at a time) and **timed power actions** (start, shutdown, reboot, stop). Runs while PMXSpan is open, or unattended from `pmxspan --run-schedules` (see below). **Usage alerts** fire when CPU, memory, network or disk I/O of a guest stays above a threshold. |
+| **Tenant limits** | Per tenant pool: maximum guests, vCPUs, memory, disk and IP addresses, enforced when PMXSpan creates a guest in the pool, assigns addresses to one of its guests or moves a guest into it. Usage is shown next to each pool. |
+| **Placement controls** | A **VMID range** per server (new guests and clones get the lowest free ID in it) and **maintenance mode** for nodes, which auto-placement skips. |
+| **Create extras** | **Custom cloud-init** files (`cicustom` user/vendor/network snippets from the nodes, with a default per catalog image), **HA** on create (default per catalog image, optional group), and a generated **Ed25519 key pair** (private key saved locally, optionally passphrase-protected; the public key goes into the guest). |
+| **Recovery copies** | Export the config, firewall, HA settings, snapshot names and IPAM records of one guest or of every listed guest to a JSON file. |
 | **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
 
 ### Not included yet
 
-Per-guest **snapshot schedules** and **reverse DNS** (PTR) management through external DNS backends.
+**Reverse DNS** (PTR) management through external DNS backends.
 
 Stale create locks are cleared with **Manage → Clear lock**. It uses the API's `skiplock`, which Proxmox only honours for `root@pam`.
 
@@ -102,12 +108,37 @@ Stale create locks are cleared with **Manage → Clear lock**. It uses the API's
   </tr>
 </table>
 
+### Automation, IPAM and backups
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/automation-schedules.png" alt="Schedules"><br><sub><b>Schedules</b>: snapshots with retention and timed power actions, with the last result of each.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/automation-alerts.png" alt="Usage alerts"><br><sub><b>Usage alerts</b>: rules for CPU, memory, network and disk I/O, and what is firing now.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/ipam-drift.png" alt="IPAM drift"><br><sub><b>IPAM drift</b>: where IPAM and the cluster disagree, with Adopt / Apply / Release.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/ipam-history.png" alt="IP history"><br><sub><b>IP history</b>: every change to every address.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/pbs-file-restore.png" alt="Single-file restore"><br><sub><b>Single-file restore</b>: browse a Proxmox Backup Server snapshot and download files or folders.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/pool-limits.png" alt="Tenant pool limits"><br><sub><b>Tenant limits</b>: guests, vCPUs, memory, disk and IPs per pool, with current usage.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/create-access-options.png" alt="Create options"><br><sub><b>Create</b>: custom cloud-init snippets, a generated SSH key pair and HA.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/vm-manage.png" alt="Manage tab"><br><sub><b>Manage</b>: config export, clone into the VMID range, rebuild with a backup first.</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><img src="screenshots/node-maintenance.png" alt="Node maintenance"><br><sub><b>Maintenance</b>: a node auto-placement skips, marked in the sidebar.</sub></td>
+    <td width="50%" valign="top"></td>
+  </tr>
+</table>
+
 ### Setup
 
 <table>
   <tr>
     <td width="50%" valign="top"><img src="screenshots/os-catalog.png" alt="OS image catalog"><br><sub><b>OS image catalog</b>: cloud images and container templates by URL, JSON import and export.</sub></td>
-    <td width="50%" valign="top"><img src="screenshots/servers.png" alt="Server profile"><br><sub><b>Servers</b>: API token or password login with TOTP, certificate pinning, catalog download storages.</sub></td>
+    <td width="50%" valign="top"><img src="screenshots/servers.png" alt="Server profile"><br><sub><b>Servers</b>: API token or password login with TOTP, certificate pinning, catalog storages, VMID range, nodes in maintenance.</sub></td>
   </tr>
   <tr>
     <td width="50%" valign="top"><img src="screenshots/diagnostics.png" alt="Connection diagnostics"><br><sub><b>Diagnostics</b>: version, quorum, nodes, storage capabilities and effective privileges.</sub></td>
@@ -177,7 +208,7 @@ Browser consoles need you to be logged in to the Proxmox web UI in that browser.
 
 | | Linux | Windows |
 |---|---|---|
-| Config, vault, OS catalog | `~/.config/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\config\` |
+| Config, vault, OS catalog, schedules and alert rules | `~/.config/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\config\` |
 | IPAM database, logs | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
 
 **Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it.
@@ -192,9 +223,27 @@ Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose 
 
 VMs created from a catalog image get a cloud-init drive and a serial console (`serial0: socket`), and their boot disk is grown to the size you choose. A catalog entry's `config` keys (for example `bios: ovmf`) are applied on create and reinstall. Catalogs get shared, so only harmless keys are accepted: CPU, memory, firmware, machine, display, agent, boot order, tags and startup for VMs; CPU, memory, swap, console, timezone, tags, startup and the `nesting`/`keyctl`/`fuse` features for containers. Anything touching disks, networks, cloud-init, host access (`args`, `hookscript`, passthrough, bind mounts) or container privileges is rejected.
 
+## Running schedules unattended
+
+Proxmox has no scheduler for snapshots or power actions and PMXSpan installs nothing on the nodes, so schedules run while the app is open and connected to the guest's server. To run them without the app, start `pmxspan --run-schedules` every few minutes on an always-on machine. It runs whatever is due once, prints what it did, and exits (status 1 if something failed). It reads the same config and vault as the app, so log in with an **API token** for those servers (a TOTP login can't run unattended), and give it the master password through a file only you can read or the `PMXSPAN_MASTER_PASSWORD` variable:
+
+```bash
+crontab -e
+```
+
+```
+*/5 * * * * /usr/bin/pmxspan --run-schedules --password-file /home/me/.config/pmxspan/master >> /home/me/.local/share/pmxspan/schedules.log 2>&1
+```
+
+On Windows, create a Task Scheduler task that runs every 5 minutes with the program `C:\Program Files\PMXSpan\pmxspan.exe` and the arguments `--run-schedules --password-file C:\Users\me\pmxspan-master.txt`. Missed runs are caught up for a while (snapshots up to 6 hours late, power actions up to 30 minutes), never repeated. Alerts are only checked while the app is open.
+
+## Custom cloud-init files
+
+Proxmox's API cannot upload snippets, so put your cloud-init files on the nodes yourself, in a storage with the `snippets` content type (for `local` that is `/var/lib/vz/snippets/`). PMXSpan lists them in the create wizard, the Cloud-Init tab and per catalog image (*OS image catalog → Custom cloud-init*, stored on this computer only and never exported or imported), and sets the VM's `cicustom`. Rebuilds keep it.
+
 ## Trying it without a cluster
 
-`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules and ipsets, backups, URL downloads (any URL containing `404` fails like a missing image), IPAM-friendly networking and a guest agent. Start it with:
+`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules and ipsets, backups (including a Proxmox Backup Server storage with browsable files), cloud-init snippets, URL downloads (any URL containing `404` fails like a missing image), IPAM-friendly networking and a guest agent. Start it with:
 
 ```bash
 python3 tools/mock_pve.py --port 8006
@@ -213,7 +262,10 @@ src/
   api/          Proxmox API client (auth, TLS pinning, task waiting, uploads) and typed responses
   ops/          provisioning logic:
                 create, rebuild, OS catalog, IP assignment, placement, guest ops,
-                diagnostics, bandwidth, tenant
+                diagnostics, bandwidth, tenant, pool limits, IPAM drift,
+                config export, schedules
+  automation.rs schedules, due-time logic and usage alerts
+  headless.rs   `pmxspan --run-schedules`
   ipam.rs       local IP address management
   vault.rs      encrypted credential storage
   jobs.rs       background jobs with step logs
@@ -226,7 +278,7 @@ tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
-Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, fingerprint parsing and moving data to new folder locations.
+Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations.
 
 ## Credits
 
