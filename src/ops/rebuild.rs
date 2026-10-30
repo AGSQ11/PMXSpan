@@ -119,6 +119,13 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
         pool.as_deref().unwrap_or("-")
     ));
 
+    // Destroying a guest also deletes its firewall config (rules, options,
+    // aliases, ipsets), so it is carried over explicitly. Without a readable
+    // snapshot the rebuilt guest would come up unprotected: stop here.
+    let firewall = FirewallSnapshot::take(client, &g)
+        .await
+        .context("could not read the guest's firewall config, so it could not be carried over - the guest was NOT modified")?;
+
     // Catalog: download first. Nothing has been touched yet if this fails.
     let artifact = match &spec.source {
         RebuildSource::Catalog { entry } => {
@@ -145,25 +152,22 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
         }
         _ => None,
     };
-    // Destroying a guest also deletes its firewall config (rules, options,
-    // aliases, ipsets), so it is carried over explicitly.
-    let firewall = match FirewallSnapshot::take(client, &g).await {
-        Ok(f) => Some(f),
-        Err(e) => {
-            ctx.warn(format!("could not read the firewall config, it will not be carried over: {e:#}"));
-            None
-        }
-    };
     let result =
         destroy_and_recreate(&env, &ctx, &spec, &g, &cfg, &st, &boot, &boot_storage, boot_size, pool.as_deref(), artifact.as_ref()).await;
     if let Some(a) = &artifact {
         catalog::cleanup(client, &ctx, a).await;
     }
     let (g, was_running) = result?;
-    if let Some(f) = &firewall {
-        f.restore(client, &ctx, &g).await;
-    }
+    let firewall_ok = firewall.restore(client, &ctx, &g).await;
     reapply_ipam(&env, &ctx, &g).await;
+    if !firewall_ok {
+        bail!(
+            "{} {} was rebuilt but its firewall config could not be fully restored (see the warnings above); \
+             it was left stopped - fix its firewall, then start it",
+            g.kind.label(),
+            g.vmid
+        );
+    }
 
     if spec.start.unwrap_or(was_running) {
         ctx.progress(0.9);
@@ -199,10 +203,11 @@ impl FirewallSnapshot {
         self.rules.is_empty() && self.aliases.is_empty() && self.ipsets.is_empty() && self.options.keys().all(|k| k == "digest")
     }
 
-    /// Writes everything back. Failures are warnings: the guest itself is fine.
-    async fn restore(&self, client: &crate::api::PveClient, ctx: &JobCtx, g: &GuestRef) {
+    /// Writes everything back. Returns `false` when anything failed (each
+    /// failure is logged); the caller then must not start the guest.
+    async fn restore(&self, client: &crate::api::PveClient, ctx: &JobCtx, g: &GuestRef) -> bool {
         if self.is_empty() {
-            return;
+            return true;
         }
         let base = format!("{}/firewall", g.path());
         let params = |v: &Value, skip: &[&str]| {
@@ -254,6 +259,7 @@ impl FirewallSnapshot {
         } else {
             ctx.warn(format!("firewall only partly restored: {}", failed.join("; ")));
         }
+        failed.is_empty()
     }
 }
 
@@ -412,7 +418,7 @@ async fn rebuild_qemu_catalog(
     if let Some(k) = encode_sshkeys(&spec.ssh_keys) {
         p.push("sshkeys", k);
     }
-    apply_catalog_overrides(&mut p, entry);
+    apply_catalog_overrides(&mut p, ctx, entry);
     ctx.info(format!("recreating VM {} with {boot} imported from {image}", g.vmid));
     let r = client.post(&format!("/nodes/{}/qemu", g.node), &p).await?;
     run_task(client, ctx, "recreate VM (import disk)", r).await?;
@@ -545,7 +551,7 @@ async fn rebuild_lxc(
         p.push("ssh-public-keys", keys.join("\n"));
     }
     if let Some(e) = entry {
-        apply_catalog_overrides(&mut p, e);
+        apply_catalog_overrides(&mut p, ctx, e);
     }
     let r = env.client.post(&format!("/nodes/{}/lxc", g.node), &p).await?;
     run_task(&env.client, ctx, &format!("recreate container from {volid}"), r).await?;

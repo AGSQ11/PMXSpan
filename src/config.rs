@@ -30,7 +30,7 @@ impl AppPaths {
             let data_dir = pd.data_dir().to_path_buf();
             let log_dir = data_dir.join("logs");
             for d in [&config_dir, &data_dir, &log_dir] {
-                let _ = std::fs::create_dir_all(d);
+                private_dir(d);
             }
             return Self { config_dir, data_dir, log_dir };
         }
@@ -40,7 +40,8 @@ impl AppPaths {
 
     fn from_base(base: PathBuf) -> Self {
         let s = Self { config_dir: base.clone(), data_dir: base.clone(), log_dir: base.join("logs") };
-        let _ = std::fs::create_dir_all(&s.log_dir);
+        private_dir(&s.config_dir);
+        private_dir(&s.log_dir);
         s
     }
 
@@ -233,6 +234,8 @@ pub struct Settings {
     /// SSH public keys offered by default in the create wizard.
     pub default_ssh_keys: String,
     pub confirm_destructive: bool,
+    /// Lock a password-protected vault after this many idle minutes (0 = never).
+    pub auto_lock_mins: u64,
     pub theme: ThemePref,
     pub ui_scale: f32,
     /// Wait this long for a task before giving up watching (it keeps running server-side).
@@ -260,6 +263,7 @@ impl Default for Settings {
             default_search_domain: String::new(),
             default_ssh_keys: String::new(),
             confirm_destructive: true,
+            auto_lock_mins: 30,
             theme: ThemePref::Dark,
             ui_scale: 1.0,
             task_timeout_secs: 3600,
@@ -307,19 +311,48 @@ pub fn new_id() -> String {
     format!("{v:032x}")
 }
 
-/// Write to a temp file then rename, so a crash never leaves half a config.
-pub fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, data)?;
+/// Creates `dir` (and its parents) and makes it private to the current user
+/// on unix (0700), including when it already existed with looser permissions.
+pub fn private_dir(dir: &Path) {
+    let _ = std::fs::create_dir_all(dir);
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o600));
+        let _ = std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700));
     }
-    std::fs::rename(&tmp, path)?;
+}
+
+/// Creates a new file that only the current user can read (0600 on unix).
+/// Fails if the path already exists, so a planted file or symlink is never
+/// written through.
+pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        o.mode(0o600);
+    }
+    o.open(path)
+}
+
+/// Write to a temp file then rename, so a crash never leaves half a config.
+/// The temp file is private from the moment it exists and has a random name.
+pub fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir)?;
+    }
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let tmp = path.with_extension(format!("{ext}.{}.tmp", &new_id()[..12]));
+    let written = create_private(&tmp).and_then(|mut f| {
+        f.write_all(data)?;
+        f.sync_all()
+    });
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, path)) {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e.into());
+    }
     Ok(())
 }
 
@@ -348,5 +381,24 @@ mod tests {
         assert_eq!(std::fs::read(new.join("vault.json")).unwrap(), b"secret");
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn atomic_writes_are_private() {
+        let dir = std::env::temp_dir().join(format!("pmxspan-atomic-{}", super::new_id()));
+        let path = dir.join("vault.json");
+        super::write_atomic(&path, b"one").unwrap();
+        super::write_atomic(&path, b"two").unwrap();
+        assert_eq!(std::fs::read(&path).unwrap(), b"two");
+        // No temp files are left behind.
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+        // An existing path is never written through.
+        assert!(super::create_private(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -277,22 +277,57 @@ pub fn sanitize_hostname(h: &str) -> String {
     cleaned.trim_matches(|c| c == '-' || c == '.').to_ascii_lowercase()
 }
 
-/// Redacts credentials from free text before it reaches logs.
+/// Credential-bearing names whose values never reach the logs.
+const SECRET_KEYS: [&str; 8] =
+    ["PVEAPIToken", "PVEAuthCookie", "CSRFPreventionToken", "password", "cipassword", "ticket", "tfa-challenge", "new-password"];
+
+/// Redacts credentials from free text before it reaches logs. Catches
+/// `key=value` (forms, headers), `key: value` and JSON `"key": "value"`.
 pub fn redact(s: &str) -> String {
     let mut out = s.to_string();
-    for marker in ["PVEAPIToken=", "PVEAuthCookie=", "CSRFPreventionToken:", "password=", "cipassword=", "ticket="] {
-        let mut search_from = 0;
-        while let Some(pos) = out[search_from..].find(marker) {
-            let start = search_from + pos + marker.len();
-            let end = out[start..]
-                .find(|c: char| c.is_whitespace() || c == '&' || c == ';' || c == '"' || c == ',')
-                .map(|e| start + e)
-                .unwrap_or(out.len());
-            out.replace_range(start..end, "[redacted]");
-            search_from = start + "[redacted]".len();
+    for key in SECRET_KEYS {
+        let mut from = 0;
+        while let Some(pos) = out[from..].find(key) {
+            let start = from + pos;
+            from = start + key.len();
+            // Whole names only: `password` must not fire inside `cipassword`,
+            // nor `ticket` in the API path `/access/ticket: …`.
+            let whole = out[..start].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/')));
+            if let Some((a, b)) = secret_value(&out, from).filter(|_| whole) {
+                out.replace_range(a..b, "[redacted]");
+                from = a + "[redacted]".len();
+            }
         }
     }
     out
+}
+
+/// The byte range of the value following a secret's name at `i`, if the name
+/// is used as a key (`=`/`:` follows, optionally inside JSON quotes).
+fn secret_value(s: &str, mut i: usize) -> Option<(usize, usize)> {
+    let b = s.as_bytes();
+    let skip = |i: &mut usize, what: &[u8]| {
+        while *i < b.len() && what.contains(&b[*i]) {
+            *i += 1;
+        }
+    };
+    if b.get(i) == Some(&b'"') {
+        i += 1;
+    }
+    skip(&mut i, b" ");
+    if !matches!(b.get(i), Some(b'=' | b':')) {
+        return None;
+    }
+    i += 1;
+    skip(&mut i, b" ");
+    let quoted = b.get(i) == Some(&b'"');
+    if quoted {
+        i += 1;
+    }
+    let end = s[i..]
+        .find(|c: char| if quoted { c == '"' } else { c.is_whitespace() || matches!(c, '&' | ';' | '"' | ',' | '}' | ')') })
+        .map_or(s.len(), |e| i + e);
+    (end > i).then_some((i, end))
 }
 
 #[cfg(test)]
@@ -338,6 +373,22 @@ mod tests {
         let r = redact("Authorization: PVEAPIToken=root@pam!x=secret-uuid other");
         assert!(!r.contains("secret-uuid"));
         assert!(r.contains("other"));
+        for (input, hidden) in [
+            ("username=root%40pam&password=hunter22&x=1", "hunter22"),
+            (r#"{"password":"hunter22","user":"a"}"#, "hunter22"),
+            (r#"{"ticket": "PVE:root@pam:65A:sig==", "x": 1}"#, "PVE:root@pam"),
+            ("CSRFPreventionToken: 65A:abc", "65A:abc"),
+            ("Cookie: PVEAuthCookie=PVE:root@pam:1::sig; other=1", "PVE:root@pam"),
+            ("cipassword=s3cret&tfa-challenge=PVE:!tfa!x", "s3cret"),
+            ("tfa-challenge=PVE:!tfa!x&password=totp:123456", "123456"),
+        ] {
+            let r = redact(input);
+            assert!(!r.contains(hidden), "{input} -> {r}");
+            assert!(r.contains("[redacted]"), "{input} -> {r}");
+        }
+        // Plain prose about passwords is left alone.
+        assert_eq!(redact("password must be at least 5 characters"), "password must be at least 5 characters");
+        assert_eq!(redact("POST /access/ticket: connection failed"), "POST /access/ticket: connection failed");
         assert_eq!(sanitize_hostname(" -Web_01.Example.com. "), "web01.example.com");
     }
 }

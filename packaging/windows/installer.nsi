@@ -20,6 +20,14 @@ SetCompressor /SOLID lzma
 !define UNINSTKEY "Software\Microsoft\Windows\CurrentVersion\Uninstall\${APPNAME}"
 
 !include "MUI2.nsh"
+!include "FileFunc.nsh"
+
+; Optional Authenticode signing of the installer and uninstaller:
+; packaging/build-installers.sh passes -DSIGN_CMD when SIGN_PFX is set.
+!ifdef SIGN_CMD
+  !finalize '${SIGN_CMD} "%1"'
+  !uninstfinalize '${SIGN_CMD} "%1"'
+!endif
 
 Name "${APPNAME} ${VERSION}"
 OutFile "${OUTFILE}"
@@ -38,10 +46,14 @@ VIAddVersionKey "LegalCopyright" ""
 !define MUI_ICON "..\assets\pmxspan.ico"
 !define MUI_UNICON "..\assets\pmxspan.ico"
 !define MUI_ABORTWARNING
-!define MUI_FINISHPAGE_RUN "$INSTDIR\pmxspan.exe"
+; The installer runs elevated; start the app through explorer so it runs
+; with the user's normal rights instead of inheriting the admin token.
+!define MUI_FINISHPAGE_RUN
 !define MUI_FINISHPAGE_RUN_TEXT "Start PMXSpan"
+!define MUI_FINISHPAGE_RUN_FUNCTION LaunchUnelevated
 
 !insertmacro MUI_PAGE_WELCOME
+!define MUI_PAGE_CUSTOMFUNCTION_LEAVE EnsureAppDir
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_COMPONENTS
 !insertmacro MUI_PAGE_INSTFILES
@@ -51,6 +63,22 @@ VIAddVersionKey "LegalCopyright" ""
 !insertmacro MUI_UNPAGE_INSTFILES
 
 !insertmacro MUI_LANGUAGE "English"
+
+Function LaunchUnelevated
+  Exec '"$WINDIR\explorer.exe" "$INSTDIR\pmxspan.exe"'
+FunctionEnd
+
+; Always install into a folder of our own (…\PMXSpan), so the permissions
+; set below never land on a folder shared with anything else.
+Function EnsureAppDir
+  ${GetFileName} "$INSTDIR" $0
+  StrCmp $0 "${APPNAME}" +2
+    StrCpy $INSTDIR "$INSTDIR\${APPNAME}"
+FunctionEnd
+
+Function .onInit
+  Call EnsureAppDir
+FunctionEnd
 
 ; Earlier releases were named ProxmoxPanel. Remove such an installation first
 ; (its shortcuts and uninstall entry); the user data moves on first start.
@@ -71,6 +99,10 @@ Section "PMXSpan (required)" SecMain
   SectionIn RO
   SetShellVarContext all
   SetOutPath "$INSTDIR"
+  ; Only administrators and SYSTEM may change the program files, also when
+  ; installed outside Program Files (where new folders let any user write).
+  nsExec::ExecToLog 'icacls "$INSTDIR" /inheritance:r /grant:r *S-1-5-32-544:(OI)(CI)F *S-1-5-18:(OI)(CI)F *S-1-5-32-545:(OI)(CI)RX'
+  Pop $0
   File "/oname=pmxspan.exe" "${EXE}"
   File "/oname=pmxspan.ico" "..\assets\pmxspan.ico"
   SetOutPath "$INSTDIR\licenses"

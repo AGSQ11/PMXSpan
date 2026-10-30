@@ -40,19 +40,18 @@ impl Source {
     }
 }
 
-/// Keys a catalog entry's `config` may not override.
-const PROTECTED_KEYS: [&str; 6] = ["vmid", "ostemplate", "pool", "password", "cipassword", "sshkeys"];
-
-/// Applies a catalog entry's ostype and config overrides.
-pub fn apply_catalog_overrides(p: &mut Params, entry: &CatalogEntry) {
+/// Applies a catalog entry's ostype and config overrides. Keys outside the
+/// catalog allowlist are skipped here too, so an entry stored before the
+/// allowlist existed (or edited on disk) cannot slip them through.
+pub fn apply_catalog_overrides(p: &mut Params, ctx: &JobCtx, entry: &CatalogEntry) {
     if !entry.ostype.is_empty() {
         p.push("ostype", catalog::normalize_ostype(&entry.virt, &entry.ostype));
     }
     for (k, v) in &entry.config {
-        if PROTECTED_KEYS.contains(&k.as_str()) {
-            continue;
+        match catalog::check_config_key(&entry.virt, k, v) {
+            Ok(()) => p.push(k, v),
+            Err(e) => ctx.warn(format!("catalog entry `{}`: skipped {e:#}", entry.id)),
         }
-        p.push(k, v);
     }
 }
 
@@ -596,7 +595,7 @@ async fn create_lxc(
         p.push("ssh-public-keys", keys.join("\n"));
     }
     if let Some(e) = catalog_entry {
-        apply_catalog_overrides(&mut p, e);
+        apply_catalog_overrides(&mut p, ctx, e);
     }
     ctx.info(format!("creating container {vmid} from {volid}"));
     let r = env.client.post(&format!("/nodes/{node}/lxc"), &p).await?;
@@ -759,7 +758,7 @@ async fn create_qemu_catalog(
     if !sd.is_empty() {
         p.push("searchdomain", sd);
     }
-    apply_catalog_overrides(&mut p, entry);
+    apply_catalog_overrides(&mut p, ctx, entry);
     ctx.info(format!("creating VM {vmid} with its disk imported from {image}"));
     let r = env.client.post(&format!("/nodes/{node}/qemu"), &p).await?;
     run_task(&env.client, ctx, "create VM (import disk)", r).await?;

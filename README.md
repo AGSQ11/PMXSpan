@@ -17,7 +17,7 @@ PMXSpan is a standalone desktop app for managing Proxmox VE clusters, written in
 | Area | What you get |
 |---|---|
 | **Connections** | Multiple server profiles. You can log in with an API token or with a password ticket (TOTP 2FA supported, auto-renewed). TLS can verify against the OS trust store, **pin the certificate's SHA-256 fingerprint** (with a "fetch from server" button), or skip verification for labs. |
-| **Secrets** | Tokens and passwords are kept in a local vault encrypted with Argon2id + XChaCha20-Poly1305 under a master password. Logs are redacted before anything is written. |
+| **Secrets** | Tokens and passwords are kept in a local vault encrypted with Argon2id (64 MiB) + XChaCha20-Poly1305 under a master password. The vault locks itself after 30 idle minutes (configurable) or from the lock button. Config, vault and logs are private to your user, and logs are redacted before anything is written. |
 | **Diagnostics** | Shows the Proxmox version, cluster/quorum, node status, which storages accept each content type (`images`, `rootdir`, `iso`, `vztmpl`, `backup`, `snippets`), and the credential's effective privileges on `/`. |
 | **Look & feel** | Two themes, **Graphite** (dark) and **Daylight** (light), switched with the sun/moon button in the top bar or in Settings (or following the system). Sidebar with the node/guest tree, a global search for guests, VMIDs, tags and IP addresses, and cards throughout. Fonts and icons are bundled, so it looks the same on every machine. |
 | **Dashboard** | Nodes, running guests, CPU and memory at a glance; a guest table with each guest's main IP; per-node usage, recent tasks and storage usage. |
@@ -28,10 +28,10 @@ PMXSpan is a standalone desktop app for managing Proxmox VE clusters, written in
 | **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. |
 | **IP assignment** | Per guest, per interface: assign one or more IPv4/IPv6 addresses from a pool (or an exact one), release them, pick the **main** address of each family, add an interface together with its addresses, remove one (its addresses are released), and adopt addresses already in a guest's config. The main addresses go into the guest config (LXC `netN`, VM cloud-init `ipconfigN`, the pool's VLAN on the NIC); additional ones are configured inside the guest. The **anti-spoofing IP filter** keeps an `ipfilter-netN` ipset per interface in sync with the assigned addresses. |
 | **OS image catalog** | Images for creating and reinstalling guests from a URL instead of a template: VM disk images (qcow2/raw/vmdk/ova, imported with `import-from`) and container templates. Catalogs import and export as JSON (`{"entries": [...]}` or an array with `id`, `label`, `virt`, `url`, `checksum`, `checksum_algorithm`, `cloud_user`, `ostype`, `nodes`, `config`/`tpl_data`, `image_format`). Images are downloaded to the per-server main or fallback storage with stall detection; permanent errors (404/403) fail at once, transient ones are retried, and a full or broken storage moves on to the next one. The downloaded file is always removed afterwards. |
-| **Rebuild / reinstall** | Replaces a guest's disks with a fresh template **or catalog image** while keeping its VMID, name, resources, NICs (**MAC addresses**), IP addresses, firewall rules/ipsets and pool. A catalog image is downloaded *before* anything is deleted, so a failed download leaves the guest untouched. You confirm by typing the VMID. |
+| **Rebuild / reinstall** | Replaces a guest's disks with a fresh template **or catalog image** while keeping its VMID, name, resources, NICs (**MAC addresses**), IP addresses, firewall rules/ipsets and pool. A catalog image is downloaded and the firewall config read *before* anything is deleted, so a failed download leaves the guest untouched. If the firewall can't be fully restored, the guest is left stopped instead of starting unprotected. You confirm by typing the VMID. |
 | **Storage** | Browse content, upload ISOs/templates with progress, download from a URL (with optional checksum), browse and download appliance templates, delete volumes. |
 | **Datacenter** | Scheduled backup jobs (create/toggle/run now/delete), storage replication, HA resources and HA status. |
-| **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a `@pve` user with a role on `/pool/<pool>` only, so customers see nothing outside their pool. |
+| **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a new `@pve` (or directory-realm) user with a role on `/pool/<pool>` only, so customers see nothing outside their pool. Existing accounts are never modified. |
 | **Jobs** | Every multi-step operation runs in the background and logs each step and the exact error it stopped on, including the tail of the Proxmox task log. No silent failures. |
 | **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
 
@@ -127,7 +127,7 @@ Stale create locks are cleared with **Manage → Clear lock**. It uses the API's
 
 | Platform | File | How |
 |---|---|---|
-| **Windows 10/11 (x64)** | `PMXSpan-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn because the installer isn't code-signed: click *More info → Run anyway*. |
+| **Windows 10/11 (x64)** | `PMXSpan-<ver>-Setup.exe` | Run it. It installs to *Program Files*, adds a Start-menu entry (and optionally a desktop shortcut) and registers an uninstaller under *Apps & features*. Windows SmartScreen may warn when the installer isn't code-signed: click *More info → Run anyway*. (Builds are signed when `packaging/build-installers.sh` runs with `SIGN_PFX` set.) |
 | Windows, no install | `pmxspan-<ver>-windows-x86_64-portable.zip` | Unzip and run `pmxspan.exe`. |
 | **Debian / Ubuntu / Mint** | `pmxspan_<ver>_amd64.deb` | `sudo apt install ./pmxspan_<ver>_amd64.deb` (use `apt`, not `dpkg -i`, so dependencies are pulled in). Then launch *PMXSpan* from the app menu or run `pmxspan`. |
 | Other Linux | `pmxspan-<ver>-linux-x86_64.tar.gz` | Extract and run `./pmxspan`. |
@@ -184,11 +184,11 @@ Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose 
 
 ## Setting up the OS image catalog
 
-1. Open **OS image catalog**. Add images one by one, or use **Import JSON…** to paste a whole catalog.
+1. Open **OS image catalog**. Add images one by one, or use **Import JSON…** to paste a whole catalog. Before anything is saved, the import shows every entry: its URL, whether it replaces an existing one, missing checksums and its config keys.
 2. In **Servers → Edit**, set the catalog download storages: a storage with the `import` content type for VM images and one with `vztmpl` for container templates. A fallback storage is optional. (In Proxmox, enable the content type under Datacenter → Storage → Edit → Content. `import` needs Proxmox VE 8.2 or newer.)
 3. Download timeouts are in **Settings**: a download whose task log stops growing for the *stall* time is aborted and retried elsewhere.
 
-VMs created from a catalog image get a cloud-init drive and a serial console (`serial0: socket`), and their boot disk is grown to the size you choose. A catalog entry's `config` keys (for example `bios: ovmf`) are applied on create and reinstall; identity, disk and network keys are never overridden.
+VMs created from a catalog image get a cloud-init drive and a serial console (`serial0: socket`), and their boot disk is grown to the size you choose. A catalog entry's `config` keys (for example `bios: ovmf`) are applied on create and reinstall. Catalogs get shared, so only harmless keys are accepted: CPU, memory, firmware, machine, display, agent, boot order, tags and startup for VMs; CPU, memory, swap, console, timezone, tags, startup and the `nesting`/`keyctl`/`fuse` features for containers. Anything touching disks, networks, cloud-init, host access (`args`, `hookscript`, passthrough, bind mounts) or container privileges is rejected.
 
 ## Trying it without a cluster
 
@@ -224,7 +224,7 @@ tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
-Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto round trip, fingerprint parsing and moving data to new folder locations.
+Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, fingerprint parsing and moving data to new folder locations.
 
 ## Credits
 

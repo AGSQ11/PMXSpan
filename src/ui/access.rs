@@ -125,8 +125,8 @@ impl AccessView {
     fn tenant_ui(&mut self, ui: &mut egui::Ui, sh: &Shared) {
         widgets::info_box(
             ui,
-            "Creates a resource pool, a Proxmox user, and grants a role on /pool/<pool> only, so the user can manage \
-             nothing outside that pool. Give the user's credentials to the customer; they will see only guests in their pool.",
+            "Creates a resource pool, a new Proxmox user (existing accounts are never modified), and grants a role on \
+             /pool/<pool> only, so the user can manage nothing outside that pool. Give the user's credentials to the customer; they will see only guests in their pool.",
         );
         let t = self.tenant.get_or_insert_with(TenantSpec::default);
         let roles = self.roles.ok().cloned().unwrap_or_default();

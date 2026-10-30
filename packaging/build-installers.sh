@@ -3,6 +3,9 @@
 #   - Linux: pmxspan_<ver>_<arch>.deb and a portable .tar.gz
 #   - Windows: PMXSpan-<ver>-Setup.exe and a portable .zip
 #     (cross-compiled; needs the x86_64-pc-windows-gnu target, mingw-w64 and makensis)
+#
+# Set SIGN_PFX (and SIGN_PASS_FILE) to Authenticode-sign pmxspan.exe, the
+# installer and the uninstaller with osslsigncode; see packaging/windows/sign.sh.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
@@ -18,7 +21,14 @@ if rustup target list --installed 2>/dev/null | grep -q x86_64-pc-windows-gnu &&
   echo "== Windows"
   cargo build --release --target x86_64-pc-windows-gnu
   EXE="$ROOT/target/x86_64-pc-windows-gnu/release/pmxspan.exe"
-  (cd packaging/windows && makensis -V2 -DVERSION="$VERSION" -DEXE="$EXE" -DOUTFILE="$ROOT/dist/PMXSpan-${VERSION}-Setup.exe" installer.nsi)
+  SIGN=()
+  if [ -n "${SIGN_PFX:-}" ]; then
+    packaging/windows/sign.sh "$EXE"
+    SIGN=(-DSIGN_CMD="$ROOT/packaging/windows/sign.sh")
+  else
+    echo "   (unsigned: set SIGN_PFX to sign)"
+  fi
+  (cd packaging/windows && makensis -V2 -DVERSION="$VERSION" -DEXE="$EXE" -DOUTFILE="$ROOT/dist/PMXSpan-${VERSION}-Setup.exe" "${SIGN[@]}" installer.nsi)
   (cd "$(dirname "$EXE")" && rm -f "$ROOT/dist/pmxspan-${VERSION}-windows-x86_64-portable.zip" && \
     python3 -c "import zipfile,sys; z=zipfile.ZipFile(sys.argv[1],'w',zipfile.ZIP_DEFLATED); z.write('pmxspan.exe'); z.close()" \
     "$ROOT/dist/pmxspan-${VERSION}-windows-x86_64-portable.zip")

@@ -27,6 +27,67 @@ use std::time::{Duration, Instant};
 
 const GIB: u64 = 1024 * 1024 * 1024;
 
+/// Guest config keys a catalog entry may set on QEMU guests. Catalogs are
+/// shared as JSON, so they are not trusted: anything that reaches the host
+/// (raw `args`, hookscripts, PCI/USB passthrough), touches identity, disks,
+/// network or cloud-init, or weakens isolation stays off this list.
+const QEMU_CONFIG_KEYS: &[&str] = &[
+    "acpi",
+    "agent",
+    "balloon",
+    "bios",
+    "boot",
+    "cores",
+    "cpu",
+    "cpulimit",
+    "cpuunits",
+    "hotplug",
+    "keyboard",
+    "localtime",
+    "machine",
+    "memory",
+    "numa",
+    "onboot",
+    "ostype",
+    "scsihw",
+    "serial0",
+    "shares",
+    "sockets",
+    "startup",
+    "tablet",
+    "tags",
+    "vcpus",
+    "vga",
+];
+
+/// Same for containers; `features` is further limited to [`LXC_FEATURES`].
+const LXC_CONFIG_KEYS: &[&str] = &[
+    "arch", "cmode", "console", "cores", "cpulimit", "cpuunits", "features", "memory", "onboot", "ostype", "startup", "swap", "tags",
+    "timezone", "tty",
+];
+
+/// Container features that stay inside an unprivileged container.
+const LXC_FEATURES: &[&str] = &["nesting", "keyctl", "fuse"];
+
+/// Checks one `config` override against the allowlist for its guest type.
+pub fn check_config_key(virt: &str, key: &str, value: &str) -> anyhow::Result<()> {
+    let allowed = if virt == "lxc" { LXC_CONFIG_KEYS } else { QEMU_CONFIG_KEYS };
+    if !allowed.contains(&key) {
+        bail!("config key `{key}` is not allowed in a catalog (allowed: {})", allowed.join(", "));
+    }
+    if value.chars().any(char::is_control) {
+        bail!("config value of `{key}` contains control characters");
+    }
+    if key == "features" {
+        for (k, v) in crate::util::PropString::parse(value).parts {
+            if !LXC_FEATURES.contains(&k.as_str()) || !matches!(v.as_str(), "0" | "1") {
+                bail!("container feature `{k}` is not allowed in a catalog (allowed: {})", LXC_FEATURES.join(", "));
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CatalogEntry {
@@ -164,6 +225,7 @@ impl CatalogEntry {
                     Value::Array(_) | Value::Object(_) => continue,
                     other => other.to_string(),
                 };
+                check_config_key(&virt, k, &v).with_context(|| format!("catalog entry `{id}`"))?;
                 config.insert(k.to_string(), v);
             }
         }
@@ -302,6 +364,11 @@ impl CatalogStore {
     pub fn remove(&mut self, id: &str) -> anyhow::Result<()> {
         self.entries.retain(|e| e.id != id);
         self.save()
+    }
+
+    /// The stored entry an imported one would replace, if any.
+    pub fn existing(&self, id: &str) -> Option<&CatalogEntry> {
+        self.entries.iter().find(|e| e.id == id)
     }
 
     /// Merges an imported catalog; entries with the same id are replaced.
@@ -690,6 +757,24 @@ mod tests {
         assert!(
             bad(json!({"id": "a", "label": "A", "virt": "qemu", "url": "https://x/y", "checksum_algorithm": "sha256"}))
                 .contains("without checksum")
+        );
+        let cfg = |virt: &str, k: &str, v: &str| {
+            bad(json!({"id": "a", "label": "A", "virt": virt, "url": "https://x/y.tar.zst", "config": {k: v}}))
+        };
+        assert!(cfg("lxc", "unprivileged", "0").contains("not allowed"));
+        assert!(cfg("lxc", "mp0", "/,mp=/host").contains("not allowed"));
+        assert!(cfg("lxc", "features", "nesting=1,mount=nfs").contains("feature `mount`"));
+        assert!(cfg("qemu", "args", "-chardev x").contains("not allowed"));
+        assert!(cfg("qemu", "hookscript", "local:snippets/x.sh").contains("not allowed"));
+        assert!(cfg("qemu", "cicustom", "user=local:snippets/u.yml").contains("not allowed"));
+        assert!(cfg("qemu", "net0", "virtio,bridge=vmbr1,firewall=0").contains("not allowed"));
+        assert!(
+            CatalogEntry::from_value(
+                &json!({"id": "a", "label": "A", "virt": "lxc", "url": "https://x/y.tar.zst",
+            "config": {"features": "nesting=1,keyctl=1", "cores": 2}}),
+                0
+            )
+            .is_ok()
         );
         assert!(parse_catalog(r#"[{"id":"a","label":"A","virt":"lxc","url":"https://h/a.tar.zst"},{"id":"A","label":"B","virt":"lxc","url":"https://h/b.tar.zst"}]"#)
             .unwrap_err()

@@ -43,10 +43,24 @@ pub async fn create(client: &PveClient, ctx: &JobCtx, t: TenantSpec) -> anyhow::
     if !valid_id(&t.username) {
         bail!("username may only contain letters, digits, '-', '_' and '.'");
     }
-    if t.password.len() < 8 {
+    let realm = t.realm.trim();
+    if !valid_id(realm) {
+        bail!("realm may only contain letters, digits, '-', '_' and '.'");
+    }
+    if realm == "pam" {
+        bail!("tenants cannot live in the `pam` realm: those are Linux accounts on the nodes. Use `pve` or a directory realm");
+    }
+    if realm == "pve" && t.password.len() < 8 {
         bail!("Proxmox requires passwords of at least 8 characters");
     }
-    let userid = format!("{}@{}", t.username, t.realm);
+    let userid = format!("{}@{realm}", t.username);
+
+    let users = client.get_list("/access/users").await?;
+    // Never take over an existing account (that would reset someone's
+    // password); existing users get access through the ACL tab instead.
+    if users.iter().any(|u| u.get("userid").and_then(|v| v.as_str()) == Some(userid.as_str())) {
+        bail!("user {userid} already exists; pick a new username, or grant the existing user a role on /pool/{} in the ACL tab", t.pool);
+    }
 
     let pools = client.get_list("/pools").await?;
     if pools.iter().any(|p| p.get("poolid").and_then(|v| v.as_str()) == Some(t.pool.as_str())) {
@@ -56,21 +70,12 @@ pub async fn create(client: &PveClient, ctx: &JobCtx, t: TenantSpec) -> anyhow::
         ctx.info(format!("created pool {}", t.pool));
     }
 
-    let users = client.get_list("/access/users").await?;
-    if users.iter().any(|u| u.get("userid").and_then(|v| v.as_str()) == Some(userid.as_str())) {
-        ctx.info(format!("user {userid} exists, resetting its password"));
-        client
-            .put("/access/password", &Params::new().set("userid", &userid).set("password", &t.password))
-            .await
-            .context("setting password")?;
-    } else {
-        let mut p = Params::new().set("userid", &userid).opt("email", Some(&t.email)).opt("comment", Some(&t.comment));
-        if t.realm == "pve" {
-            p.push("password", &t.password);
-        }
-        client.post("/access/users", &p).await.context("creating user")?;
-        ctx.info(format!("created user {userid}"));
+    let mut p = Params::new().set("userid", &userid).opt("email", Some(&t.email)).opt("comment", Some(&t.comment));
+    if realm == "pve" {
+        p.push("password", &t.password);
     }
+    client.post("/access/users", &p).await.context("creating user")?;
+    ctx.info(format!("created user {userid}"));
 
     client
         .put(
