@@ -74,6 +74,8 @@ pub enum Action {
     Connect(String),
     Disconnect,
     Lock,
+    /// Put a node of the connected server in or out of maintenance.
+    SetMaintenance(String, bool),
     ConfigChanged,
 }
 
@@ -495,6 +497,30 @@ impl App {
                     self.nav = Nav::Servers;
                 }
                 Action::Lock => self.lock(),
+                Action::SetMaintenance(node, on) => {
+                    let Some(sid) = self.session.as_ref().map(|s| s.shared.server_id.clone()) else { continue };
+                    if let Some(p) = self.config.profiles.iter_mut().find(|p| p.id == sid) {
+                        p.maintenance_nodes.retain(|n| *n != node);
+                        if on {
+                            p.maintenance_nodes.push(node.clone());
+                            p.maintenance_nodes.sort();
+                        }
+                    }
+                    self.toast(
+                        ToastLevel::Info,
+                        if on {
+                            format!("{node} is in maintenance: auto-placement skips it")
+                        } else {
+                            format!("{node} is back in service")
+                        },
+                    );
+                    self.save_config();
+                    if let Some(s) = self.session.as_mut()
+                        && let Some(p) = self.config.profile(&sid)
+                    {
+                        s.shared.profile = p.clone();
+                    }
+                }
                 Action::ConfigChanged => {
                     self.save_config();
                     if let Some(s) = self.session.as_mut() {
@@ -825,7 +851,21 @@ impl App {
                 egui::FontId::proportional(12.0),
                 p.muted,
             );
-            painter.circle_filled(egui::pos2(rect.left() + 28.0, rect.center().y), 3.5, theme::status_color(&n.status));
+            let maint = self.session.as_ref().is_some_and(|s| s.shared.profile.in_maintenance(&n.node));
+            painter.circle_filled(
+                egui::pos2(rect.left() + 28.0, rect.center().y),
+                3.5,
+                if maint { theme::warn() } else { theme::status_color(&n.status) },
+            );
+            if maint {
+                painter.text(
+                    egui::pos2(rect.right() - 8.0, rect.center().y),
+                    egui::Align2::RIGHT_CENTER,
+                    theme::icon::WRENCH,
+                    egui::FontId::proportional(12.0),
+                    theme::warn(),
+                );
+            }
             painter.text(
                 egui::pos2(rect.left() + 38.0, rect.center().y),
                 egui::Align2::LEFT_CENTER,

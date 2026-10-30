@@ -141,11 +141,34 @@ impl Assignment {
     }
 }
 
+/// One change to an address, for the IP assignment history.
+#[derive(Clone, Debug, Serialize, Deserialize, Default, PartialEq)]
+#[serde(default)]
+pub struct IpEvent {
+    pub at: i64,
+    /// `assigned`, `adopted`, `released`, `main`, `reserved` or `unreserved`.
+    pub action: String,
+    pub ip: String,
+    pub pool_id: String,
+    pub server_id: String,
+    pub vmid: Option<u64>,
+    pub iface: Option<u32>,
+    pub hostname: String,
+    pub note: String,
+    /// The local OS user who made the change.
+    pub by: String,
+}
+
+/// Oldest history entries are dropped beyond this many.
+const HISTORY_MAX: usize = 20_000;
+
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct IpamDb {
     pub pools: Vec<Pool>,
     pub assignments: Vec<Assignment>,
+    /// Every change to an assignment, oldest first.
+    pub history: Vec<IpEvent>,
     #[serde(skip)]
     path: PathBuf,
 }
@@ -292,13 +315,17 @@ impl IpamDb {
         self.assignments.iter().any(|a| a.main && a.same_slot(server_id, vmid, iface, v6))
     }
 
-    fn record(&mut self, req: &AllocRequest, mut a: Allocation) -> Allocation {
+    fn record(&mut self, req: &AllocRequest, a: Allocation) -> Allocation {
+        self.record_as(req, a, "assigned")
+    }
+
+    fn record_as(&mut self, req: &AllocRequest, mut a: Allocation, action: &str) -> Allocation {
         if let Some(existing) = self.assignments.iter().find(|x| x.ip == a.ip) {
             a.main = existing.main;
             return a;
         }
         a.main = !self.has_main(&req.server_id, req.vmid, req.iface, req.v6);
-        self.assignments.push(Assignment {
+        let assignment = Assignment {
             ip: a.ip.clone(),
             pool_id: a.pool_id.clone(),
             server_id: req.server_id.clone(),
@@ -309,8 +336,41 @@ impl IpamDb {
             assigned_at: chrono::Utc::now().timestamp(),
             iface: Some(req.iface),
             main: a.main,
-        });
+        };
+        self.log(action, &assignment, "");
+        self.assignments.push(assignment);
         a
+    }
+
+    /// Appends to the history (bounded).
+    fn log(&mut self, action: &str, a: &Assignment, note: &str) {
+        let by = std::env::var("USER").or_else(|_| std::env::var("USERNAME")).unwrap_or_default();
+        self.history.push(IpEvent {
+            at: chrono::Utc::now().timestamp(),
+            action: action.to_string(),
+            ip: a.ip.clone(),
+            pool_id: a.pool_id.clone(),
+            server_id: a.server_id.clone(),
+            vmid: a.vmid,
+            iface: a.iface,
+            hostname: a.hostname.clone(),
+            note: note.to_string(),
+            by,
+        });
+        if self.history.len() > HISTORY_MAX {
+            let drop = self.history.len() - HISTORY_MAX;
+            self.history.drain(..drop);
+        }
+    }
+
+    /// Removes the assignments matching `hit` and logs each as released.
+    fn remove_where(&mut self, hit: impl Fn(&Assignment) -> bool, note: &str) -> Vec<Assignment> {
+        let (gone, kept): (Vec<Assignment>, Vec<Assignment>) = std::mem::take(&mut self.assignments).into_iter().partition(|a| hit(a));
+        self.assignments = kept;
+        for a in &gone {
+            self.log(if a.reserved { "unreserved" } else { "released" }, a, note);
+        }
+        gone
     }
 
     /// Plans and records an allocation. The first address of a family on an
@@ -325,14 +385,15 @@ impl IpamDb {
     /// Allocates `count` addresses atomically: either all are recorded or none.
     /// A preferred address (if any) is the first one; the rest come from the same pool rules.
     pub fn allocate_many(&mut self, req: &AllocRequest, count: usize) -> anyhow::Result<Vec<Allocation>> {
-        let snapshot = self.assignments.clone();
+        let snapshot = (self.assignments.clone(), self.history.len());
         let mut out = Vec::new();
         for i in 0..count.max(1) {
             let r = if i == 0 { req.clone() } else { AllocRequest { preferred: None, ..req.clone() } };
             match self.plan(&r) {
                 Ok(a) => out.push(self.record(&r, a)),
                 Err(e) => {
-                    self.assignments = snapshot;
+                    self.assignments = snapshot.0;
+                    self.history.truncate(snapshot.1);
                     let done = if i > 0 { format!(" (only {i} of {count} were available)") } else { String::new() };
                     return Err(e.context(format!("could not allocate {count} address(es){done}")));
                 }
@@ -345,8 +406,7 @@ impl IpamDb {
     /// Releases an address. If it was the main address of its interface/family,
     /// the next address of the same slot is promoted so the guest keeps a main IP.
     pub fn release_ip(&mut self, ip: &str) -> anyhow::Result<()> {
-        let removed: Vec<Assignment> = self.assignments.iter().filter(|a| a.ip == ip && !a.reserved).cloned().collect();
-        self.assignments.retain(|a| a.ip != ip || a.reserved);
+        let removed = self.remove_where(|a| a.ip == ip && !a.reserved, "");
         for r in removed.iter().filter(|r| r.main) {
             if let Some(vmid) = r.vmid
                 && let Some(next) = self.assignments.iter_mut().find(|a| a.same_slot(&r.server_id, vmid, r.iface(), r.is_v6()))
@@ -364,21 +424,17 @@ impl IpamDb {
         for a in self.assignments.iter_mut().filter(|a| a.same_slot(&target.server_id, vmid, target.iface(), target.is_v6())) {
             a.main = a.ip == ip;
         }
+        if !target.main {
+            self.log("main", &target, "");
+        }
         self.save()
     }
 
     /// Releases every address on one interface of a guest.
     pub fn release_iface(&mut self, server_id: &str, vmid: u64, iface: u32) -> anyhow::Result<Vec<String>> {
-        let mut released = Vec::new();
-        self.assignments.retain(|a| {
-            let hit = a.server_id == server_id && a.vmid == Some(vmid) && a.iface() == iface && !a.reserved;
-            if hit {
-                released.push(a.ip.clone());
-            }
-            !hit
-        });
+        let gone = self.remove_where(|a| a.server_id == server_id && a.vmid == Some(vmid) && a.iface() == iface && !a.reserved, "");
         self.save()?;
-        Ok(released)
+        Ok(gone.into_iter().map(|a| a.ip).collect())
     }
 
     /// Records an address the guest already uses (adoption). It must lie in a
@@ -402,7 +458,7 @@ impl IpamDb {
         let req =
             AllocRequest { server_id: server_id.into(), vmid, hostname: hostname.into(), v6: addr.is_ipv6(), iface, ..Default::default() };
         let a = self.allocation(&pool, addr.to_string());
-        let a = self.record(&req, a);
+        let a = self.record_as(&req, a, "adopted");
         self.save()?;
         Ok(a)
     }
@@ -414,17 +470,24 @@ impl IpamDb {
     }
 
     /// Releases every non-reserved address held by a guest.
-    pub fn release_guest(&mut self, server_id: &str, vmid: u64) -> anyhow::Result<Vec<String>> {
-        let mut released = Vec::new();
-        self.assignments.retain(|a| {
-            let hit = a.server_id == server_id && a.vmid == Some(vmid) && !a.reserved;
-            if hit {
-                released.push(a.ip.clone());
-            }
-            !hit
-        });
+    /// The note is recorded in the history.
+    pub fn release_guest_note(&mut self, server_id: &str, vmid: u64, note: &str) -> anyhow::Result<Vec<String>> {
+        let gone = self.remove_where(|a| a.server_id == server_id && a.vmid == Some(vmid) && !a.reserved, note);
         self.save()?;
-        Ok(released)
+        Ok(gone.into_iter().map(|a| a.ip).collect())
+    }
+
+    /// Drops a reservation.
+    pub fn unreserve(&mut self, ip: &str) -> anyhow::Result<()> {
+        self.remove_where(|a| a.ip == ip && a.reserved, "");
+        self.save()
+    }
+
+    /// Deletes a pool and forgets every assignment in it.
+    pub fn delete_pool(&mut self, id: &str) -> anyhow::Result<()> {
+        self.remove_where(|a| a.pool_id == id, "pool deleted");
+        self.pools.retain(|p| p.id != id);
+        self.save()
     }
 
     pub fn guest_ips(&self, server_id: &str, vmid: u64) -> Vec<&Assignment> {
@@ -440,14 +503,16 @@ impl IpamDb {
         if self.is_taken(&addr.to_string()) {
             bail!("{addr} is already in use");
         }
-        self.assignments.push(Assignment {
+        let a = Assignment {
             ip: addr.to_string(),
             pool_id: pool_id.to_string(),
             reserved: true,
             note: note.to_string(),
             assigned_at: chrono::Utc::now().timestamp(),
             ..Default::default()
-        });
+        };
+        self.log("reserved", &a, note);
+        self.assignments.push(a);
         self.save()
     }
 }
@@ -467,6 +532,39 @@ mod tests {
             ..Default::default()
         });
         db
+    }
+
+    #[test]
+    fn history_records_every_change() {
+        let mut db = db();
+        let req = AllocRequest { server_id: "s".into(), vmid: 100, bridge: "vmbr0".into(), ..Default::default() };
+        db.allocate_many(&req, 2).unwrap();
+        db.set_main("192.0.2.3").unwrap();
+        db.reserve("p4", "192.0.2.6", "router").unwrap();
+        db.release_ip("192.0.2.2").unwrap();
+        // A failed multi-allocation leaves no trace.
+        assert!(db.allocate_many(&AllocRequest { vmid: 101, ..req.clone() }, 9).is_err());
+        db.release_guest_note("s", 100, "guest destroyed").unwrap();
+        db.unreserve("192.0.2.6").unwrap();
+        let actions: Vec<(&str, &str)> = db.history.iter().map(|e| (e.action.as_str(), e.ip.as_str())).collect();
+        assert_eq!(
+            actions,
+            vec![
+                ("assigned", "192.0.2.2"),
+                ("assigned", "192.0.2.3"),
+                ("main", "192.0.2.3"),
+                ("reserved", "192.0.2.6"),
+                ("released", "192.0.2.2"),
+                ("released", "192.0.2.3"),
+                ("unreserved", "192.0.2.6"),
+            ]
+        );
+        assert_eq!(db.history[5].note, "guest destroyed");
+        assert_eq!(db.history[0].vmid, Some(100));
+        // It survives a reload.
+        let again = IpamDb::load(&db.path);
+        assert_eq!(again.history.len(), 7);
+        let _ = std::fs::remove_file(&db.path);
     }
 
     #[test]

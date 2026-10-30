@@ -57,6 +57,10 @@ pub struct CreateView {
     vztmpl: String,
     lxc_catalog: bool,
     catalog_id: Option<String>,
+    /// `None` = follow the catalog image's default.
+    ha: Option<bool>,
+    ha_group: String,
+    key_passphrase: String,
     node: Option<String>,
     storage: Option<String>,
     auto_vmid: bool,
@@ -119,6 +123,9 @@ impl Default for CreateView {
             vztmpl: String::new(),
             lxc_catalog: false,
             catalog_id: None,
+            ha: None,
+            ha_group: String::new(),
+            key_passphrase: String::new(),
             node: None,
             storage: None,
             auto_vmid: true,
@@ -619,6 +626,25 @@ impl CreateView {
                                 .hint_text("ssh-ed25519 AAAA… user@host"),
                         );
                         ui.end_row();
+                        ui.label("");
+                        ui.horizontal(|ui| {
+                            if ui
+                                .button(format!("{}  Generate key pair…", theme::icon::KEY))
+                                .on_hover_text(
+                                    "Creates an Ed25519 key, saves the private key where you choose and adds the public key above",
+                                )
+                                .clicked()
+                            {
+                                self.generate_keypair(actions);
+                            }
+                            ui.add(
+                                egui::TextEdit::singleline(&mut self.key_passphrase)
+                                    .password(true)
+                                    .hint_text("passphrase (optional)")
+                                    .desired_width(180.0),
+                            );
+                        });
+                        ui.end_row();
                     }
                 });
             });
@@ -639,6 +665,30 @@ impl CreateView {
                     ui.label("Resource pool");
                     let pools = sh.pools();
                     widgets::combo_opt(ui, "cr-pool", &mut self.pool, &pools, "none", 180.0);
+                    ui.end_row();
+                    ui.label("High availability");
+                    ui.horizontal(|ui| {
+                        let default = self.ha_default(sh);
+                        let mut on = self.ha.unwrap_or(default.is_some());
+                        if ui.checkbox(&mut on, "add to HA").changed() {
+                            self.ha = Some(on);
+                            if on && self.ha_group.is_empty() {
+                                self.ha_group = default.clone().unwrap_or_default();
+                            }
+                        }
+                        if on {
+                            if self.ha.is_none() {
+                                // Following the catalog image's default until changed here.
+                                self.ha_group = default.unwrap_or_default();
+                            }
+                            if ui
+                                .add(egui::TextEdit::singleline(&mut self.ha_group).hint_text("group (optional)").desired_width(150.0))
+                                .changed()
+                            {
+                                self.ha = Some(true);
+                            }
+                        }
+                    });
                     ui.end_row();
                     ui.label("Tags");
                     ui.add(egui::TextEdit::singleline(&mut self.tags).hint_text("web;production"));
@@ -683,6 +733,49 @@ impl CreateView {
                 }
             });
         });
+    }
+
+    /// Generates an SSH key pair, saves the private key (0600) and its `.pub`,
+    /// and adds the public key to the guest's keys.
+    fn generate_keypair(&mut self, actions: &mut Actions) {
+        let name = if self.hostname.trim().is_empty() { "pmxspan".to_string() } else { crate::util::sanitize_hostname(&self.hostname) };
+        let Some(path) = rfd::FileDialog::new().set_file_name(format!("{name}_ed25519")).save_file() else { return };
+        let result = crate::util::generate_ssh_keypair(&name, &self.key_passphrase).and_then(|(private, public)| {
+            crate::config::write_atomic(&path, private.as_bytes())?;
+            let mut pub_path = path.clone().into_os_string();
+            pub_path.push(".pub");
+            crate::config::write_atomic(std::path::Path::new(&pub_path), format!("{public}\n").as_bytes())?;
+            Ok(public)
+        });
+        match result {
+            Ok(public) => {
+                if !self.sshkeys.trim().is_empty() && !self.sshkeys.ends_with('\n') {
+                    self.sshkeys.push('\n');
+                }
+                self.sshkeys.push_str(&public);
+                zeroize::Zeroize::zeroize(&mut self.key_passphrase);
+                actions.toast_ok(format!("Private key saved to {}", path.display()));
+            }
+            Err(e) => actions.toast_err(format!("Generating the key pair failed: {e:#}")),
+        }
+    }
+
+    /// The selected catalog image's HA default: `Some(group)` when it wants HA.
+    fn ha_default(&self, sh: &Shared) -> Option<String> {
+        let catalog = if self.kind == GuestKind::Qemu { self.qmode == QemuMode::Catalog } else { self.lxc_catalog };
+        if !catalog {
+            return None;
+        }
+        self.catalog_entry(sh, self.kind == GuestKind::Lxc).filter(|e| e.ha).map(|e| e.ha_group)
+    }
+
+    fn ha_choice(&self, sh: &Shared) -> Option<String> {
+        let default = self.ha_default(sh);
+        match self.ha {
+            Some(true) => Some(self.ha_group.trim().to_string()),
+            Some(false) => None,
+            None => default,
+        }
     }
 
     fn catalog_entry(&self, sh: &Shared, lxc: bool) -> Option<CatalogEntry> {
@@ -798,6 +891,7 @@ impl CreateView {
             ciuser: self.ciuser.clone(),
             password: if iso_mode { String::new() } else { self.password.clone() },
             ssh_keys: if iso_mode { String::new() } else { self.sshkeys.clone() },
+            ha: self.ha_choice(sh),
             pool: self.pool.clone(),
             tags: self.tags.clone(),
             description: self.description.clone(),

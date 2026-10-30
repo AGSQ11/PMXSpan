@@ -41,6 +41,8 @@ pub struct ManageTab {
     rb_show: bool,
     rb_keys: String,
     rb_start: Option<bool>,
+    rb_backup: Option<bool>,
+    rb_backup_storage: String,
     vztmpls: Fetch<Vec<String>>,
     purge: bool,
     pool: Option<String>,
@@ -86,6 +88,11 @@ impl ManageTab {
                         password: self.rb_password.clone(),
                         ssh_keys: self.rb_keys.clone(),
                         start: self.rb_start,
+                        backup_storage: self
+                            .rb_backup
+                            .unwrap_or(sh.settings.backup_before_rebuild)
+                            .then(|| self.rb_backup_storage.clone())
+                            .filter(|s| !s.is_empty()),
                     };
                     let env = sh.env();
                     sh.spawn(gc.title("Rebuild"), move |ctx| rebuild::run(env, spec, ctx));
@@ -151,10 +158,24 @@ impl ManageTab {
             });
         }
 
+        // ---- recovery copy ----
+        widgets::section(ui, "Recovery copy");
+        ui.horizontal(|ui| {
+            if ui.button(format!("{}  Export config…", theme::icon::DOWNLOAD)).clicked()
+                && let Some(path) = crate::ui::guests::save_export_dialog(&sh.profile, &g.vmid.to_string())
+            {
+                let item = crate::ops::export::ExportItem { guest: g.clone(), name: gc.res.name.clone(), pool: gc.res.pool.clone() };
+                let (c, p, ipam) = (sh.client.clone(), sh.profile.clone(), sh.ipam.clone());
+                sh.spawn(gc.title("Export config"), move |ctx| crate::ops::export::export(c, ctx, p, ipam, vec![item], path));
+            }
+            widgets::muted(ui, "Config, firewall, HA, snapshot names and IPAM records as JSON. Disks are not included.");
+        });
+
         // ---- clone ----
         widgets::section(ui, "Clone");
         if self.next_id.is_idle() {
-            self.next_id = sh.fetch(|c| async move { guest::next_vmid(&c).await });
+            let range = sh.profile.vmid_range();
+            self.next_id = sh.fetch(move |c| async move { guest::next_vmid_in(&c, range).await });
         }
         if self.clone_id.is_none() {
             self.clone_id = self.next_id.ok().copied();
@@ -288,6 +309,25 @@ impl ManageTab {
                 if ui.checkbox(&mut start, "Start after rebuild").changed() {
                     self.rb_start = Some(start);
                 }
+                ui.end_row();
+                ui.label("Backup first");
+                ui.horizontal(|ui| {
+                    let storages = sh.storages_with(&g.node, "backup");
+                    if self.rb_backup_storage.is_empty() || !storages.contains(&self.rb_backup_storage) {
+                        let pref = &sh.settings.rebuild_backup_storage;
+                        self.rb_backup_storage =
+                            if storages.contains(pref) { pref.clone() } else { storages.first().cloned().unwrap_or_default() };
+                    }
+                    let mut on = self.rb_backup.unwrap_or(sh.settings.backup_before_rebuild) && !storages.is_empty();
+                    if ui.add_enabled(!storages.is_empty(), egui::Checkbox::new(&mut on, "")).changed() {
+                        self.rb_backup = Some(on);
+                    }
+                    if storages.is_empty() {
+                        widgets::muted(ui, "no backup storage on this node");
+                    } else if on {
+                        widgets::combo(ui, "rb-bk", &mut self.rb_backup_storage, &storages, 200.0);
+                    }
+                });
                 ui.end_row();
             });
             let source_label = if self.rb_catalog {

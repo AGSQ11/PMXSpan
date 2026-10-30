@@ -32,6 +32,7 @@ pub struct GuestsView {
 
 impl GuestsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, sh: &Shared, actions: &mut Actions) {
+        let mut export = false;
         if let Some((g, a)) = widgets::confirm_ui(ui.ctx(), &mut self.confirm) {
             let c = sh.client.clone();
             sh.spawn(format!("{} {} {}", a.label(), g.kind.label(), g.vmid), move |ctx| async move { guest::power(&c, &ctx, &g, a).await });
@@ -53,6 +54,10 @@ impl GuestsView {
             let nodes = sh.nodes();
             widgets::combo_opt(ui, "g-node", &mut self.node, &nodes, "All nodes", 120.0);
             ui.checkbox(&mut self.show_templates, "Templates");
+            export = ui
+                .button(format!("{}  Export configs…", theme::icon::DOWNLOAD))
+                .on_hover_text("Save the config, firewall, HA and IPAM records of the guests listed below to a JSON file")
+                .clicked();
         });
         let f = self.filter.to_lowercase();
         let mut rows: Vec<&Resource> = sh
@@ -69,6 +74,19 @@ impl GuestsView {
                     || g.pool.to_lowercase().contains(&f)
             })
             .collect();
+        if export && let Some(path) = save_export_dialog(&sh.profile, "guests") {
+            let items: Vec<_> = rows
+                .iter()
+                .filter_map(|r| {
+                    let guest = GuestRef { node: r.node.clone(), kind: r.kind()?, vmid: r.vmid };
+                    Some(crate::ops::export::ExportItem { guest, name: r.name.clone(), pool: r.pool.clone() })
+                })
+                .collect();
+            let (c, p, ipam) = (sh.client.clone(), sh.profile.clone(), sh.ipam.clone());
+            sh.spawn(format!("Export {} guest config(s)", items.len()), move |ctx| {
+                crate::ops::export::export(c, ctx, p, ipam, items, path)
+            });
+        }
         rows.sort_by(|a, b| {
             let o = match self.sort {
                 SortBy::Vmid => a.vmid.cmp(&b.vmid),
@@ -206,4 +224,9 @@ impl GuestsView {
             })
         });
     }
+}
+
+/// Asks where to save an export; `None` when cancelled.
+pub fn save_export_dialog(profile: &crate::config::ServerProfile, what: &str) -> Option<std::path::PathBuf> {
+    rfd::FileDialog::new().set_file_name(crate::ops::export::file_name(profile, what)).add_filter("JSON", &["json"]).save_file()
 }

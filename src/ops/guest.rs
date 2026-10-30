@@ -396,7 +396,7 @@ pub async fn destroy(
     let r = client.delete(&g.path(), &p).await?;
     run_task(client, ctx, &format!("destroy {}", g.vmid), r).await?;
     if let Some((db, server_id)) = ipam {
-        let released = db.lock().release_guest(server_id, g.vmid)?;
+        let released = db.lock().release_guest_note(server_id, g.vmid, "guest destroyed")?;
         if !released.is_empty() {
             ctx.info(format!("released IPAM addresses: {}", released.join(", ")));
         }
@@ -426,6 +426,28 @@ pub async fn unlock(client: &PveClient, ctx: &JobCtx, g: &GuestRef) -> anyhow::R
 pub async fn next_vmid(client: &PveClient) -> anyhow::Result<u64> {
     let v = client.get("/cluster/nextid").await?;
     v.as_u64().or_else(|| v.as_str().and_then(|s| s.parse().ok())).ok_or_else(|| anyhow!("unexpected /cluster/nextid response: {v}"))
+}
+
+/// The lowest free VMID inside `range` (or Proxmox's next free ID without one).
+pub async fn next_vmid_in(client: &PveClient, range: Option<(u64, u64)>) -> anyhow::Result<u64> {
+    let Some((lo, hi)) = range else { return next_vmid(client).await };
+    let used: std::collections::HashSet<u64> =
+        client.get_q("/cluster/resources", &Params::new().set("type", "vm")).await?.arr().iter().map(|r| r.u("vmid")).collect();
+    let mut checked = 0;
+    for id in lo..=hi {
+        if used.contains(&id) {
+            continue;
+        }
+        // Double-check with Proxmox (it also knows IDs reserved by running tasks).
+        if vmid_free(client, id).await? {
+            return Ok(id);
+        }
+        checked += 1;
+        if checked > 50 {
+            break;
+        }
+    }
+    bail!("no free VMID in this server's range {lo}–{hi}")
 }
 
 pub async fn vmid_free(client: &PveClient, vmid: u64) -> anyhow::Result<bool> {

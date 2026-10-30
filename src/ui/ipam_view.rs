@@ -4,12 +4,26 @@ use super::widgets::{self, Confirm};
 use super::{Actions, Shared, theme};
 use crate::config::AppConfig;
 use crate::ipam::{IpamDb, Pool};
+use crate::ops::drift::{self, DriftItem, DriftKind};
+use crate::rt::Fetch;
 use egui::RichText;
 use parking_lot::Mutex;
 use std::sync::Arc;
 
+#[derive(Clone, Copy, PartialEq, Default)]
+enum Tab {
+    #[default]
+    Pools,
+    History,
+    Drift,
+}
+
 #[derive(Default)]
 pub struct IpamView {
+    tab: Tab,
+    history_filter: String,
+    drift: Fetch<Vec<drift::GuestNet>>,
+    drift_server: String,
     selected: Option<String>,
     draft: Option<Pool>,
     reserve_ip: String,
@@ -21,15 +35,152 @@ pub struct IpamView {
 
 impl IpamView {
     pub fn ui(&mut self, ui: &mut egui::Ui, db: &Arc<Mutex<IpamDb>>, config: &AppConfig, shared: Option<&Shared>, actions: &mut Actions) {
+        widgets::tab_bar(ui, &mut self.tab, &[(Tab::Pools, "Pools"), (Tab::History, "History"), (Tab::Drift, "Drift")]);
+        ui.add_space(6.0);
+        match self.tab {
+            Tab::Pools => self.pools_ui(ui, db, config, shared, actions),
+            Tab::History => self.history_ui(ui, db, config, shared, actions),
+            Tab::Drift => self.drift_ui(ui, db, shared, actions),
+        }
+    }
+
+    fn history_ui(
+        &mut self,
+        ui: &mut egui::Ui,
+        db: &Arc<Mutex<IpamDb>>,
+        config: &AppConfig,
+        shared: Option<&Shared>,
+        actions: &mut Actions,
+    ) {
+        widgets::muted(ui, "Every address assigned, adopted, released, made main, reserved or unreserved, newest first.");
+        ui.add(
+            egui::TextEdit::singleline(&mut self.history_filter).hint_text("Filter by IP, VMID, hostname or action…").desired_width(320.0),
+        );
+        let f = self.history_filter.trim().to_lowercase();
+        let rows: Vec<_> = db
+            .lock()
+            .history
+            .iter()
+            .rev()
+            .filter(|e| {
+                f.is_empty()
+                    || e.ip.contains(&f)
+                    || e.action.contains(&f)
+                    || e.hostname.to_lowercase().contains(&f)
+                    || e.vmid.map(|v| v.to_string() == f).unwrap_or(false)
+            })
+            .take(2000)
+            .cloned()
+            .collect();
+        if rows.is_empty() {
+            widgets::muted(ui, "No changes recorded yet.");
+            return;
+        }
+        egui::ScrollArea::vertical().id_salt("ipam-history").show(ui, |ui| {
+            egui::Grid::new("ipam-history-grid").striped(true).num_columns(8).spacing([14.0, 4.0]).show(ui, |ui| {
+                for h in ["When", "Action", "IP", "Server", "VMID", "Interface", "Hostname / note", "By"] {
+                    ui.label(RichText::new(h).strong());
+                }
+                ui.end_row();
+                for e in rows {
+                    ui.label(crate::util::fmt_epoch(e.at));
+                    let tone = match e.action.as_str() {
+                        "released" | "unreserved" => theme::warn(),
+                        "assigned" | "adopted" => theme::ok(),
+                        _ => theme::info(),
+                    };
+                    ui.label(RichText::new(&e.action).color(tone));
+                    ui.label(RichText::new(&e.ip).monospace());
+                    ui.label(config.profile(&e.server_id).map(|p| p.display_name()).unwrap_or_else(|| "-".into()));
+                    match e.vmid {
+                        Some(v) => {
+                            if ui.link(v.to_string()).clicked()
+                                && let Some(s) = shared.filter(|s| s.server_id == e.server_id)
+                                && let Some(k) = s.guests().find(|g| g.vmid == v).and_then(|r| r.kind())
+                            {
+                                actions.nav(super::Nav::Guest(k, v));
+                            }
+                        }
+                        None => {
+                            ui.label("-");
+                        }
+                    }
+                    ui.label(e.iface.map(|n| format!("net{n}")).unwrap_or_default());
+                    let text = [e.hostname.as_str(), e.note.as_str()].into_iter().filter(|s| !s.is_empty()).collect::<Vec<_>>().join(" · ");
+                    ui.label(text);
+                    ui.label(&e.by);
+                    ui.end_row();
+                }
+            });
+        });
+    }
+
+    fn drift_ui(&mut self, ui: &mut egui::Ui, db: &Arc<Mutex<IpamDb>>, shared: Option<&Shared>, actions: &mut Actions) {
+        let Some(sh) = shared else {
+            widgets::muted(ui, "Connect to a server to compare IPAM with its guests.");
+            return;
+        };
+        widgets::muted(
+            ui,
+            "Compares IPAM with the connected cluster: addresses kept for guests that are gone, static addresses guests use that IPAM \
+             doesn't know, main addresses that differ, and guests created by PMXSpan that have no IPAM record.",
+        );
+        let stale = self.drift_server != sh.server_id;
+        ui.horizontal(|ui| {
+            let busy = self.drift.is_loading();
+            if ui.add_enabled(!busy, egui::Button::new(if self.drift.is_idle() || stale { "Scan" } else { "Scan again" })).clicked()
+                || stale
+            {
+                self.drift_server = sh.server_id.clone();
+                let guests: Vec<_> = sh.guests().cloned().collect();
+                self.drift = sh.fetch(move |c| async move { Ok(drift::scan(&c, guests).await) });
+            }
+            if busy {
+                ui.spinner();
+                ui.label("reading guest configs…");
+            }
+        });
+        let Some(Ok(nets)) = self.drift.poll().map(|r| r.as_ref().map(Clone::clone)) else {
+            if let Some(Err(e)) = self.drift.poll() {
+                widgets::error_box(ui, e);
+            }
+            return;
+        };
+        let all_vmids: Vec<u64> = sh.guests().map(|r| r.vmid).collect();
+        let items = drift::compare(&sh.server_id, &db.lock(), &nets, &all_vmids, &sh.settings.managed_tag);
+        let unreadable = nets.iter().filter(|n| n.ips.is_none()).count();
+        if unreadable > 0 {
+            widgets::warn_box(ui, &format!("{unreadable} guest config(s) could not be read and were skipped."));
+        }
+        if items.is_empty() {
+            widgets::info_box(ui, "No drift: IPAM matches the cluster.");
+            return;
+        }
+        let mut rescan = false;
+        egui::ScrollArea::vertical().id_salt("ipam-drift").show(ui, |ui| {
+            egui::Grid::new("ipam-drift-grid").striped(true).num_columns(6).spacing([14.0, 6.0]).show(ui, |ui| {
+                for h in ["VMID", "Guest", "Issue", "Address", "Details", ""] {
+                    ui.label(RichText::new(h).strong());
+                }
+                ui.end_row();
+                for it in items {
+                    drift_row(ui, sh, db, &it, actions, &mut rescan);
+                    ui.end_row();
+                }
+            });
+        });
+        if rescan {
+            actions.toast("Started - scan again once the job has finished");
+        }
+    }
+
+    fn pools_ui(&mut self, ui: &mut egui::Ui, db: &Arc<Mutex<IpamDb>>, config: &AppConfig, shared: Option<&Shared>, actions: &mut Actions) {
         widgets::muted(
             ui,
             "Pools used by the create wizard and rebuilds. An explicitly requested IP is assigned exactly or the operation fails — never silently replaced.",
         );
         if let Some(id) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_delete) {
-            let mut d = db.lock();
-            d.pools.retain(|p| p.id != id);
-            d.assignments.retain(|a| a.pool_id != id);
-            if let Err(e) = d.save() {
+            if let Err(e) = db.lock().delete_pool(&id) {
                 actions.toast_err(format!("{e:#}"));
             }
             self.selected = None;
@@ -39,8 +190,7 @@ impl IpamView {
             let mut d = db.lock();
             // Guest addresses go through release_ip so a released main address is replaced;
             // reservations are simply dropped.
-            d.assignments.retain(|a| a.ip != ip || !a.reserved);
-            if let Err(e) = d.release_ip(&ip) {
+            if let Err(e) = d.unreserve(&ip).and_then(|()| d.release_ip(&ip)) {
                 actions.toast_err(format!("{e:#}"));
             } else {
                 actions.toast("Released in IPAM only - re-apply on the guest's IP addresses tab to update its config");
@@ -175,6 +325,61 @@ impl IpamView {
                 });
             });
         });
+    }
+}
+
+fn drift_row(ui: &mut egui::Ui, sh: &Shared, db: &Arc<Mutex<IpamDb>>, it: &DriftItem, actions: &mut Actions, rescan: &mut bool) {
+    match &it.guest {
+        Some(g) => {
+            if ui.link(it.vmid.to_string()).clicked() {
+                actions.nav(super::Nav::Guest(g.kind, g.vmid));
+            }
+        }
+        None => {
+            ui.label(it.vmid.to_string());
+        }
+    }
+    ui.label(&it.name);
+    let tone = if it.kind == DriftKind::NoIpam { theme::info() } else { theme::warn() };
+    ui.label(RichText::new(drift::kind_label(&it.kind)).color(tone));
+    let iface = it.iface.map(|n| format!(" (net{n})")).unwrap_or_default();
+    ui.label(RichText::new(format!("{}{iface}", it.ip)).monospace());
+    match &it.kind {
+        DriftKind::Orphan => {
+            ui.label("IPAM still holds it for a VMID that no longer exists");
+            if ui.small_button("Release").clicked() {
+                match db.lock().release_guest_note(&sh.server_id, it.vmid, "guest gone (drift)") {
+                    Ok(ips) => actions.toast_ok(format!("Released {}", ips.join(", "))),
+                    Err(e) => actions.toast_err(format!("{e:#}")),
+                }
+            }
+        }
+        DriftKind::Untracked => {
+            ui.label("configured on the guest, not recorded in IPAM");
+            if let Some(g) = it.guest.clone()
+                && ui.small_button("Adopt").clicked()
+            {
+                let env = sh.env();
+                sh.spawn(format!("Adopt addresses of {}", g.vmid), move |ctx| crate::ops::ipassign::adopt(env, ctx, g));
+                *rescan = true;
+            }
+        }
+        DriftKind::Mismatch { guest_has } => {
+            ui.label(format!("IPAM main address; the guest has {guest_has}"));
+            if let Some(g) = it.guest.clone()
+                && ui.small_button("Apply IPAM").on_hover_text("Rewrite the guest's network config from IPAM").clicked()
+            {
+                let env = sh.env();
+                sh.spawn(format!("Apply IPAM to {}", g.vmid), move |ctx| async move {
+                    crate::ops::ipassign::apply(&env, &ctx, &g, Default::default(), &Default::default()).await
+                });
+                *rescan = true;
+            }
+        }
+        DriftKind::NoIpam => {
+            ui.label(format!("tagged {} but has no static address in IPAM", sh.settings.managed_tag));
+            ui.label("");
+        }
     }
 }
 

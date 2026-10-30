@@ -83,8 +83,24 @@ impl NodeView {
                 {
                     ui.label(RichText::new(format!("{n} package updates available")).color(theme::warn()));
                 }
+                if sh.profile.in_maintenance(&node) {
+                    widgets::pill(ui, format!("{}  In maintenance", theme::icon::WRENCH), widgets::Tone::Warn)
+                        .on_hover_text("Auto-placement skips this node. Existing guests are not affected.");
+                }
             });
             ui.horizontal_wrapped(|ui| {
+                let maint = sh.profile.in_maintenance(&node);
+                if ui
+                    .button(if maint {
+                        format!("{}  End maintenance", theme::icon::WRENCH)
+                    } else {
+                        format!("{}  Maintenance", theme::icon::WRENCH)
+                    })
+                    .on_hover_text("Maintenance keeps new guests off this node (auto-placement skips it). Stored in PMXSpan only.")
+                    .clicked()
+                {
+                    actions.0.push(super::Action::SetMaintenance(node.clone(), !maint));
+                }
                 if ui.button("Shell (browser)").clicked() {
                     let _ = webbrowser::open(&crate::ops::guest::node_shell_url(&sh.client, &node));
                 }

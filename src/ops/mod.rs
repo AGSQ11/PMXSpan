@@ -5,6 +5,8 @@ pub mod bandwidth;
 pub mod catalog;
 pub mod create;
 pub mod diagnostics;
+pub mod drift;
+pub mod export;
 pub mod guest;
 pub mod ipassign;
 pub mod placement;

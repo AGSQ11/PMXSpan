@@ -43,6 +43,8 @@ pub struct RebuildSpec {
     pub ssh_keys: String,
     /// Start after rebuild (default: if it was running before).
     pub start: Option<bool>,
+    /// Back the guest up to this storage before anything is changed.
+    pub backup_storage: Option<String>,
 }
 
 /// QEMU keys carried over from the old VM.
@@ -126,6 +128,13 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
         .await
         .context("could not read the guest's firewall config, so it could not be carried over - the guest was NOT modified")?;
 
+    if let Some(storage) = &spec.backup_storage {
+        ctx.info(format!("backing up {} to {storage} before the rebuild", g.vmid));
+        guest::backup_now(client, &ctx, &g, storage, "snapshot", "zstd", "PMXSpan: before rebuild of {{guestname}}", false)
+            .await
+            .context("the backup before the rebuild failed - the guest was NOT modified")?;
+    }
+
     // Catalog: download first. Nothing has been touched yet if this fails.
     let artifact = match &spec.source {
         RebuildSource::Catalog { entry } => {
@@ -177,7 +186,8 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
 }
 
 /// A guest's firewall config, as read from the API.
-struct FirewallSnapshot {
+#[derive(serde::Serialize)]
+pub(crate) struct FirewallSnapshot {
     options: serde_json::Map<String, Value>,
     rules: Vec<Value>,
     aliases: Vec<Value>,
@@ -185,7 +195,7 @@ struct FirewallSnapshot {
 }
 
 impl FirewallSnapshot {
-    async fn take(client: &crate::api::PveClient, g: &GuestRef) -> anyhow::Result<Self> {
+    pub(crate) async fn take(client: &crate::api::PveClient, g: &GuestRef) -> anyhow::Result<Self> {
         let base = format!("{}/firewall", g.path());
         let options = client.get(&format!("{base}/options")).await?.as_object().cloned().unwrap_or_default();
         let mut rules = client.get_list(&format!("{base}/rules")).await?;

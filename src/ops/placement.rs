@@ -24,6 +24,8 @@ pub struct PlacementRequest {
     pub storage: Option<String>,
     /// Restrict to these nodes (empty = all online nodes).
     pub nodes: Vec<String>,
+    /// Never pick these (nodes in maintenance).
+    pub exclude: Vec<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -114,6 +116,10 @@ pub async fn select(
             notes.push(format!("{}: offline", n.node));
             continue;
         }
+        if req.exclude.contains(&n.node) {
+            notes.push(format!("{}: in maintenance", n.node));
+            continue;
+        }
         let mem_free_mb = (n.maxmem - n.mem) / MIB;
         if mem_free_mb < req.memory_mb as f64 {
             notes.push(format!("{}: only {:.0} MiB RAM free, need {}", n.node, mem_free_mb, req.memory_mb));
@@ -165,7 +171,7 @@ mod tests {
     }
 
     fn req() -> PlacementRequest {
-        PlacementRequest { memory_mb: 1024, disk_gb: 20, content: "images", storage: None, nodes: vec![] }
+        PlacementRequest { memory_mb: 1024, disk_gb: 20, content: "images", storage: None, nodes: vec![], exclude: vec![] }
     }
 
     #[test]

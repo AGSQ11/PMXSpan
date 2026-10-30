@@ -223,6 +223,14 @@ impl CatalogView {
             ui.label("Nodes");
             ui.add(egui::TextEdit::singleline(&mut d.nodes).hint_text("any node (or: pve1, pve2)").desired_width(260.0));
             ui.end_row();
+            ui.label("High availability");
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut e.ha, "add new guests to HA");
+                if e.ha {
+                    ui.add(egui::TextEdit::singleline(&mut e.ha_group).hint_text("HA group (optional)").desired_width(160.0));
+                }
+            });
+            ui.end_row();
             ui.label("Config overrides");
             ui.vertical(|ui| {
                 ui.add(
@@ -328,6 +336,16 @@ impl CatalogView {
                     if !e.config.is_empty() {
                         let cfg = e.config.iter().map(|(k, v)| format!("{k}: {v}")).collect::<Vec<_>>().join(", ");
                         ui.label(RichText::new(format!("config: {cfg}")).monospace().small());
+                    }
+                    if e.ha || !e.nodes.is_empty() {
+                        let mut parts = Vec::new();
+                        if e.ha {
+                            parts.push(if e.ha_group.is_empty() { "HA".to_string() } else { format!("HA group {}", e.ha_group) });
+                        }
+                        if !e.nodes.is_empty() {
+                            parts.push(format!("nodes {}", e.nodes.join(", ")));
+                        }
+                        ui.label(RichText::new(parts.join(" · ")).small());
                     }
                     ui.separator();
                 }

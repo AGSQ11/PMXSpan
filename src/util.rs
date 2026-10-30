@@ -249,6 +249,18 @@ pub fn generate_password(len: usize) -> String {
     String::from_utf8(out).expect("ascii")
 }
 
+/// Generates an Ed25519 SSH key pair: the OpenSSH private key (encrypted
+/// when `passphrase` is set) and the public key line.
+pub fn generate_ssh_keypair(comment: &str, passphrase: &str) -> anyhow::Result<(zeroize::Zeroizing<String>, String)> {
+    use ssh_key::{Algorithm, LineEnding, PrivateKey};
+    let mut rng = rand::rngs::OsRng;
+    let mut key = PrivateKey::random(&mut rng, Algorithm::Ed25519)?;
+    key.set_comment(comment);
+    let public = key.public_key().to_openssh()?;
+    let key = if passphrase.is_empty() { key } else { key.encrypt(&mut rng, passphrase)? };
+    Ok((key.to_openssh(LineEnding::LF)?, public))
+}
+
 /// Random locally-administered unicast MAC with an optional fixed prefix
 /// (e.g. `BC:24:11`, the Proxmox OUI).
 pub fn generate_mac(prefix: &str) -> String {
@@ -366,6 +378,19 @@ mod tests {
         let m = generate_mac("");
         let first = u8::from_str_radix(&m[..2], 16).unwrap();
         assert_eq!(first & 0x03, 0x02);
+    }
+
+    #[test]
+    fn ssh_keypairs() {
+        let (private, public) = generate_ssh_keypair("web01", "").unwrap();
+        assert!(public.starts_with("ssh-ed25519 ") && public.ends_with(" web01"));
+        let parsed = ssh_key::PrivateKey::from_openssh(private.as_bytes()).unwrap();
+        assert_eq!(parsed.public_key().to_openssh().unwrap(), public);
+        let (enc, public) = generate_ssh_keypair("db01", "s3cret pass").unwrap();
+        let parsed = ssh_key::PrivateKey::from_openssh(enc.as_bytes()).unwrap();
+        assert!(parsed.is_encrypted());
+        assert!(parsed.decrypt("wrong").is_err());
+        assert_eq!(parsed.decrypt("s3cret pass").unwrap().public_key().to_openssh().unwrap(), public);
     }
 
     #[test]

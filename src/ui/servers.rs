@@ -224,6 +224,28 @@ impl ServersView {
                 ui.add(egui::TextEdit::singleline(&mut draft.catalog_lxc_storage_fallback).hint_text("optional").desired_width(140.0));
             });
             ui.end_row();
+            ui.label("VMID range");
+            ui.horizontal(|ui| {
+                ui.add(egui::DragValue::new(&mut draft.vmid_min).range(0..=999_999_999).prefix("from "));
+                ui.add(egui::DragValue::new(&mut draft.vmid_max).range(0..=999_999_999).prefix("to "));
+                widgets::muted(ui, "0 = no limit. New guests and clones get the lowest free ID in the range.");
+            });
+            ui.end_row();
+            if !draft.maintenance_nodes.is_empty() {
+                ui.label("In maintenance");
+                ui.horizontal_wrapped(|ui| {
+                    let mut remove = None;
+                    for n in &draft.maintenance_nodes {
+                        if ui.small_button(format!("{n}  ✕")).on_hover_text("Take out of maintenance").clicked() {
+                            remove = Some(n.clone());
+                        }
+                    }
+                    if let Some(n) = remove {
+                        draft.maintenance_nodes.retain(|x| *x != n);
+                    }
+                });
+                ui.end_row();
+            }
             ui.label("Notes");
             ui.add(egui::TextEdit::multiline(&mut draft.notes).desired_rows(2));
             ui.end_row();

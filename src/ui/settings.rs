@@ -110,6 +110,17 @@ impl SettingsView {
                 ui.label("Task watch timeout");
                 ui.add(egui::DragValue::new(&mut s.task_timeout_secs).range(60..=86400).suffix(" s"));
                 ui.end_row();
+                ui.label("Before a rebuild");
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut s.backup_before_rebuild, "back the guest up (default)");
+                    ui.add_enabled(
+                        s.backup_before_rebuild,
+                        egui::TextEdit::singleline(&mut s.rebuild_backup_storage)
+                            .hint_text("storage (empty = first backup storage)")
+                            .desired_width(220.0),
+                    );
+                });
+                ui.end_row();
                 ui.label("Catalog downloads");
                 ui.horizontal(|ui| {
                     ui.label("stalled after");

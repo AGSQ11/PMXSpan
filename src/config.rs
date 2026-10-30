@@ -140,6 +140,11 @@ pub struct ServerProfile {
     /// Container template download storages (content `vztmpl`), main then fallback.
     pub catalog_lxc_storage: String,
     pub catalog_lxc_storage_fallback: String,
+    /// New VMIDs come from this range (0 = no lower / upper bound).
+    pub vmid_min: u64,
+    pub vmid_max: u64,
+    /// Nodes auto-placement skips (kept locally; Proxmox is not told).
+    pub maintenance_nodes: Vec<String>,
 }
 
 impl Default for ServerProfile {
@@ -162,6 +167,9 @@ impl Default for ServerProfile {
             catalog_qemu_storage_fallback: String::new(),
             catalog_lxc_storage: String::new(),
             catalog_lxc_storage_fallback: String::new(),
+            vmid_min: 0,
+            vmid_max: 0,
+            maintenance_nodes: Vec::new(),
         }
     }
 }
@@ -181,6 +189,18 @@ impl ServerProfile {
 
     pub fn secret_key(&self) -> String {
         format!("server:{}", self.id)
+    }
+
+    /// The configured VMID range, if any bound is set.
+    pub fn vmid_range(&self) -> Option<(u64, u64)> {
+        if self.vmid_min == 0 && self.vmid_max == 0 {
+            return None;
+        }
+        Some((self.vmid_min.max(100), if self.vmid_max == 0 { 999_999_999 } else { self.vmid_max }))
+    }
+
+    pub fn in_maintenance(&self, node: &str) -> bool {
+        self.maintenance_nodes.iter().any(|n| n == node)
     }
 }
 
@@ -252,6 +272,10 @@ pub struct Settings {
     pub download_max_wait_secs: u64,
     /// Free-space floor for catalog downloads (0 = 3 GiB VM images / 1 GiB templates).
     pub download_min_bytes: u64,
+    /// Offer a backup before every rebuild (checked by default in the dialog).
+    pub backup_before_rebuild: bool,
+    /// Preferred storage for those backups (empty = first backup storage).
+    pub rebuild_backup_storage: String,
 }
 
 impl Default for Settings {
@@ -275,6 +299,8 @@ impl Default for Settings {
             download_stall_secs: 180,
             download_max_wait_secs: 1800,
             download_min_bytes: 0,
+            backup_before_rebuild: true,
+            rebuild_backup_storage: String::new(),
         }
     }
 }

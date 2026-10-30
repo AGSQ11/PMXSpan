@@ -108,6 +108,10 @@ pub struct CatalogEntry {
     /// QEMU image format: qcow2, raw, vmdk or ova (guessed from the URL if empty).
     pub image_format: String,
     pub notes: String,
+    /// Put new guests from this image under HA by default.
+    pub ha: bool,
+    /// HA group for them (Proxmox VE 8; empty = none).
+    pub ha_group: String,
 }
 
 pub const QEMU_OSTYPES: [&str; 11] = ["l26", "l24", "win11", "win10", "win8", "win7", "wvista", "wxp", "w2k", "solaris", "other"];
@@ -229,7 +233,14 @@ impl CatalogEntry {
                 config.insert(k.to_string(), v);
             }
         }
+        let ha = matches!(obj.get("ha"), Some(Value::Bool(true))) || matches!(s("ha").as_deref(), Some("1" | "true" | "yes"));
+        let ha_group = s("ha_group").unwrap_or_default();
+        if !ha_group.is_empty() && !ha_group.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.')) {
+            bail!("catalog entry `{id}` has an invalid ha_group");
+        }
         Ok(Self {
+            ha,
+            ha_group,
             ostype: normalize_ostype(&virt, &s("ostype").unwrap_or_default()),
             nodes: list_value(obj.get("nodes")),
             notes: s("notes").unwrap_or_default(),

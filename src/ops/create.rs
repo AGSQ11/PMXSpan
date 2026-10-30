@@ -135,6 +135,8 @@ pub struct CreateSpec {
     pub agent: bool,
     pub onboot: bool,
     pub start: bool,
+    /// Add to HA (with this group; empty = none).
+    pub ha: Option<String>,
 }
 
 impl Default for CreateSpec {
@@ -168,6 +170,7 @@ impl Default for CreateSpec {
             agent: true,
             onboot: true,
             start: true,
+            ha: None,
         }
     }
 }
@@ -433,14 +436,20 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
     let kind = spec.source.kind();
 
     // 1. VMID
+    let range = env.profile.vmid_range();
     let vmid = match spec.vmid {
         Some(id) => {
+            if let Some((lo, hi)) = range
+                && !(lo..=hi).contains(&id)
+            {
+                bail!("VMID {id} is outside this server's range {lo}–{hi} (Servers → Edit)");
+            }
             if !guest::vmid_free(client, id).await? {
                 bail!("VMID {id} is already in use");
             }
             id
         }
-        None => guest::next_vmid(client).await?,
+        None => guest::next_vmid_in(client, range).await?,
     };
     ctx.info(format!("VMID {vmid}"));
     ctx.progress(0.05);
@@ -465,6 +474,7 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
                         content,
                         storage: None,
                         nodes: vec![n.clone()],
+                        exclude: vec![],
                     };
                     placement::select(client, &req, env.settings.placement, &env.settings.resource_priority).await?.storage
                 }
@@ -478,6 +488,7 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
                 content,
                 storage: spec.storage.clone(),
                 nodes: allowed_nodes.clone(),
+                exclude: env.profile.maintenance_nodes.clone(),
             };
             let p = placement::select(client, &req, env.settings.placement, &env.settings.resource_priority).await?;
             for n in &p.notes {
@@ -486,6 +497,9 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
             (p.node, p.storage)
         }
     };
+    if env.profile.in_maintenance(&node) {
+        ctx.warn(format!("{node} is in maintenance; creating there because it was chosen explicitly"));
+    }
     ctx.info(format!("target node {node}, storage {storage}"));
     ctx.progress(0.1);
 
@@ -543,6 +557,14 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
     if spec.start {
         ctx.progress(0.9);
         guest::power(client, &ctx, &g, guest::PowerAction::Start).await.context("guest was created but failed to start")?;
+    }
+    if let Some(group) = &spec.ha {
+        let sid = format!("{}:{vmid}", if kind == GuestKind::Lxc { "ct" } else { "vm" });
+        let p = Params::new().set("sid", &sid).set("state", if spec.start { "started" } else { "stopped" }).opt("group", Some(group));
+        match client.post("/cluster/ha/resources", &p).await {
+            Ok(_) => ctx.info(format!("added {sid} to HA{}", if group.is_empty() { String::new() } else { format!(" (group {group})") })),
+            Err(e) => ctx.warn(format!("the guest was created but adding it to HA failed: {e:#}")),
+        }
     }
     let ipdesc = ips.summary();
     Ok(format!(

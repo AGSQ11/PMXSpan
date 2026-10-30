@@ -469,15 +469,12 @@ pub async fn remove_interface(env: Env, ctx: JobCtx, g: GuestRef, n: u32) -> any
     Ok(format!("net{n} removed"))
 }
 
-/// Records the static addresses already configured on the guest into IPAM,
-/// so guests created elsewhere can be managed here.
-pub async fn adopt(env: Env, ctx: JobCtx, g: GuestRef) -> anyhow::Result<String> {
-    let cfg = guest::config(&env.client, &g).await?;
-    let name = cfg.get("name").or_else(|| cfg.get("hostname")).map(value_str).unwrap_or_default();
-    let mut adopted = Vec::new();
-    let mut skipped = Vec::new();
-    for n in interfaces(&cfg).keys() {
-        let src = match g.kind {
+/// The static addresses in a guest's config, per interface (LXC `netN ip=`,
+/// QEMU cloud-init `ipconfigN ip=`), without prefix length.
+pub fn static_ips(kind: GuestKind, cfg: &Map<String, Value>) -> Vec<(u32, String)> {
+    let mut out = Vec::new();
+    for n in interfaces(cfg).keys() {
+        let src = match kind {
             GuestKind::Lxc => cfg.get(&format!("net{n}")).map(value_str),
             GuestKind::Qemu => cfg.get(&format!("ipconfig{n}")).map(value_str),
         }
@@ -488,11 +485,23 @@ pub async fn adopt(env: Env, ctx: JobCtx, g: GuestRef) -> anyhow::Result<String>
             if matches!(v, "dhcp" | "auto" | "manual" | "") {
                 continue;
             }
-            let ip = v.split('/').next().unwrap_or(v);
-            match env.ipam.lock().register_existing(&env.server_id, g.vmid, *n, ip, &name) {
-                Ok(_) => adopted.push(format!("{ip} (net{n})")),
-                Err(e) => skipped.push(format!("{ip}: {e:#}")),
-            }
+            out.push((*n, v.split('/').next().unwrap_or(v).to_string()));
+        }
+    }
+    out
+}
+
+/// Records the static addresses already configured on the guest into IPAM,
+/// so guests created elsewhere can be managed here.
+pub async fn adopt(env: Env, ctx: JobCtx, g: GuestRef) -> anyhow::Result<String> {
+    let cfg = guest::config(&env.client, &g).await?;
+    let name = cfg.get("name").or_else(|| cfg.get("hostname")).map(value_str).unwrap_or_default();
+    let mut adopted = Vec::new();
+    let mut skipped = Vec::new();
+    for (n, ip) in static_ips(g.kind, &cfg) {
+        match env.ipam.lock().register_existing(&env.server_id, g.vmid, n, &ip, &name) {
+            Ok(_) => adopted.push(format!("{ip} (net{n})")),
+            Err(e) => skipped.push(format!("{ip}: {e:#}")),
         }
     }
     for s in &skipped {
