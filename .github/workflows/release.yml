@@ -4,7 +4,7 @@ name: release
 # as a GitHub release. Can also be started by hand for an existing tag.
 on:
   push:
-    tags: ["v*"]
+    tags: ["v*", "[0-9]*"]
   workflow_dispatch:
     inputs:
       tag:
