@@ -333,12 +333,19 @@ impl AutomationView {
                 });
                 ui.horizontal(|ui| {
                     if ui.button(RichText::new("Save rule").strong()).clicked() {
-                        r.vmids = self.rule_vmids.split([',', ' ', ';']).filter_map(|v| v.trim().parse().ok()).collect();
-                        let mut st = store.lock();
-                        st.alert_rules.push(r.clone());
-                        match st.save() {
-                            Ok(()) => close = true,
-                            Err(e) => actions.toast_err(format!("{e:#}")),
+                        let tokens: Vec<&str> = self.rule_vmids.split([',', ' ', ';']).filter(|t| !t.trim().is_empty()).collect();
+                        let bad: Vec<&str> = tokens.iter().copied().filter(|t| t.trim().parse::<u64>().is_err()).collect();
+                        if !bad.is_empty() {
+                            // A typo must not quietly widen the rule to every guest.
+                            actions.toast_err(format!("Not a VMID: {}", bad.join(", ")));
+                        } else {
+                            r.vmids = tokens.iter().filter_map(|t| t.trim().parse().ok()).collect();
+                            let mut st = store.lock();
+                            st.alert_rules.push(r.clone());
+                            match st.save() {
+                                Ok(()) => close = true,
+                                Err(e) => actions.toast_err(format!("{e:#}")),
+                            }
                         }
                     }
                     if ui.button("Cancel").clicked() {

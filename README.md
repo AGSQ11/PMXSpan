@@ -225,14 +225,14 @@ VMs created from a catalog image get a cloud-init drive and a serial console (`s
 
 ## Running schedules unattended
 
-Proxmox has no scheduler for snapshots or power actions and PMXSpan installs nothing on the nodes, so schedules run while the app is open and connected to the guest's server. To run them without the app, start `pmxspan --run-schedules` every few minutes on an always-on machine. It runs whatever is due once, prints what it did, and exits (status 1 if something failed). It reads the same config and vault as the app, so log in with an **API token** for those servers (a TOTP login can't run unattended), and give it the master password through a file only you can read or the `PMXSPAN_MASTER_PASSWORD` variable:
+Proxmox has no scheduler for snapshots or power actions and PMXSpan installs nothing on the nodes, so schedules run while the app is open and connected to the guest's server. To run them without the app, start `pmxspan --run-schedules` every few minutes on an always-on machine. It runs whatever is due once, prints what it did, and exits (status 1 if something failed). It reads the same config and vault as the app, so log in with an **API token** for those servers (a TOTP login can't run unattended), and give it the master password through a file only you can read (`chmod 600`) or the `PMXSPAN_MASTER_PASSWORD` variable. Keep that file outside `~/.config/pmxspan/`, so a backup or sync of the config folder never holds the vault and its password together. Overlapping runs are skipped, and the app leaves due schedules to a run that is in progress:
 
 ```bash
 crontab -e
 ```
 
 ```
-*/5 * * * * /usr/bin/pmxspan --run-schedules --password-file /home/me/.config/pmxspan/master >> /home/me/.local/share/pmxspan/schedules.log 2>&1
+*/5 * * * * /usr/bin/pmxspan --run-schedules --password-file /home/me/.secrets/pmxspan-master >> /home/me/.local/share/pmxspan/schedules.log 2>&1
 ```
 
 On Windows, create a Task Scheduler task that runs every 5 minutes with the program `C:\Program Files\PMXSpan\pmxspan.exe` and the arguments `--run-schedules --password-file C:\Users\me\pmxspan-master.txt`. Missed runs are caught up for a while (snapshots up to 6 hours late, power actions up to 30 minutes), never repeated. Alerts are only checked while the app is open.

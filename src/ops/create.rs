@@ -438,6 +438,10 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
     validate(&spec)?;
     let kind = spec.source.kind();
 
+    if spec.cicustom.contains("user=") && (!spec.password.is_empty() || !spec.ssh_keys.trim().is_empty() || !spec.ciuser.is_empty()) {
+        ctx.warn("a custom cloud-init user-data file is set: Proxmox does not apply the cloud-init user, password or SSH keys from this form; the file has to set them");
+    }
+
     // 0. Tenant pool limits.
     if let Some(pool) = &spec.pool {
         let ips = [&spec.net.ipv4, &spec.net.ipv6].iter().filter(|m| matches!(m, IpMode::Ipam { .. })).count() as u64;

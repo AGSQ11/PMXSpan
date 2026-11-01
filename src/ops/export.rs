@@ -52,14 +52,14 @@ pub async fn export(
         };
         let sid = format!("{}:{}", if g.kind == crate::api::types::GuestKind::Lxc { "ct" } else { "vm" }, g.vmid);
         let ha = client.get(&format!("/cluster/ha/resources/{sid}")).await.ok();
-        let snapshots: Vec<String> = client
-            .get_list(&format!("{}/snapshot", g.path()))
-            .await
-            .unwrap_or_default()
-            .iter()
-            .map(|s| s.s("name"))
-            .filter(|n| n != "current")
-            .collect();
+        // `null` (not an empty list) when they could not be read.
+        let snapshots = match client.get_list(&format!("{}/snapshot", g.path())).await {
+            Ok(list) => json!(list.iter().map(|s| s.s("name")).filter(|n| n != "current").collect::<Vec<_>>()),
+            Err(e) => {
+                ctx.warn(format!("{}: snapshots not readable: {e:#}", g.vmid));
+                Value::Null
+            }
+        };
         let ipam_records: Vec<_> = ipam.lock().guest_ips(&profile.id, g.vmid).into_iter().cloned().collect();
         guests.push(json!({
             "vmid": g.vmid,

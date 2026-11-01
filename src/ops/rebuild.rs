@@ -97,6 +97,13 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
     if cfg.get("protection").map(|v| v.as_str() == Some("1") || v.as_u64() == Some(1)).unwrap_or(false) {
         bail!("guest has protection enabled; disable it before rebuilding");
     }
+    let custom_user = cfg.get("cicustom").and_then(Value::as_str).is_some_and(|c| c.contains("user="));
+    if g.kind == GuestKind::Qemu && custom_user && (!spec.password.is_empty() || !spec.ssh_keys.trim().is_empty()) {
+        ctx.warn(
+            "the guest keeps its custom cloud-init user-data file: Proxmox does not apply the new password or SSH keys from this form; \
+             the file has to set them (or remove it on the Cloud-Init tab first)",
+        );
+    }
     let pool = client
         .get_q("/cluster/resources", &Params::new().set("type", "vm"))
         .await?

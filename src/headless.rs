@@ -12,6 +12,49 @@ use crate::config::{AppConfig, AppPaths};
 use crate::jobs::JobCtx;
 use crate::vault::Vault;
 
+/// A run older than this is assumed to have crashed and its lock is broken.
+const LOCK_STALE: std::time::Duration = std::time::Duration::from_secs(2 * 3600);
+
+fn lock_path(automation_file: &std::path::Path) -> std::path::PathBuf {
+    automation_file.with_extension("json.lock")
+}
+
+/// Whether a `--run-schedules` run is in progress (the app then leaves due
+/// schedules to it).
+pub fn lock_held(automation_file: &std::path::Path) -> bool {
+    std::fs::metadata(lock_path(automation_file))
+        .and_then(|m| m.modified())
+        .is_ok_and(|t| t.elapsed().map(|e| e < LOCK_STALE).unwrap_or(true))
+}
+
+/// Exclusive lock for one run, removed when dropped.
+struct RunLock(std::path::PathBuf);
+
+impl RunLock {
+    fn acquire(automation_file: &std::path::Path) -> anyhow::Result<Option<Self>> {
+        let path = lock_path(automation_file);
+        for _ in 0..2 {
+            match crate::config::create_private(&path) {
+                Ok(_) => return Ok(Some(Self(path))),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    if lock_held(automation_file) {
+                        return Ok(None);
+                    }
+                    let _ = std::fs::remove_file(&path);
+                }
+                Err(e) => return Err(anyhow::anyhow!("creating {}: {e}", path.display())),
+            }
+        }
+        Ok(None)
+    }
+}
+
+impl Drop for RunLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
 pub fn wants_headless() -> bool {
     std::env::args().any(|a| a == "--run-schedules")
 }
@@ -40,13 +83,24 @@ fn master_password() -> anyhow::Result<zeroize::Zeroizing<String>> {
 
 fn run(paths: &AppPaths) -> anyhow::Result<usize> {
     let config = AppConfig::load(&paths.config_file());
-    let mut store = AutomationStore::load(&paths.automation_file());
+    let file = paths.automation_file();
+    // One run at a time: an overlapping cron start just leaves.
+    let Some(_lock) = RunLock::acquire(&file)? else {
+        println!("another --run-schedules run is in progress");
+        return Ok(0);
+    };
+    let mut store = AutomationStore::load(&file);
     let now = chrono::Local::now();
     let due: Vec<_> = store.schedules.iter().filter(|s| s.due(now)).cloned().collect();
     if due.is_empty() {
         println!("no schedules due");
         return Ok(0);
     }
+    // Mark them as started in the file before running anything, so the app
+    // (which re-reads it) does not run them as well.
+    let ids: Vec<String> = due.iter().map(|s| s.id.clone()).collect();
+    let owned = AutomationStore::claim(&file, &ids, now.timestamp(), now)?;
+    let due: Vec<_> = due.into_iter().filter(|s| owned.contains(&s.id)).collect();
     let mut vault = Vault::open(&paths.vault_file())?;
     let pw = if vault.is_protected() { master_password()? } else { zeroize::Zeroizing::new(String::new()) };
     vault.unlock(&pw).map_err(|e| anyhow::anyhow!("unlocking the vault: {e} (set PMXSPAN_MASTER_PASSWORD or use --password-file)"))?;
@@ -102,7 +156,7 @@ fn run(paths: &AppPaths) -> anyhow::Result<usize> {
     }
     // Another run (or the app) may have changed other schedules meanwhile:
     // merge only the outcomes into the current file.
-    let mut current = AutomationStore::load(&paths.automation_file());
+    let mut current = AutomationStore::load(&file);
     for s in &store.schedules {
         if let Some(c) = current.schedules.iter_mut().find(|c| c.id == s.id) {
             c.last_run = c.last_run.max(s.last_run);

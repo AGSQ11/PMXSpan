@@ -3,7 +3,7 @@
 use super::guest::{self, PowerAction};
 use crate::api::PveClient;
 use crate::api::types::GuestRef;
-use crate::automation::{Schedule, ScheduleAction, auto_snapshot_name};
+use crate::automation::{Schedule, ScheduleAction, auto_snapshot_name, auto_snapshot_prefix};
 use crate::jobs::JobCtx;
 use crate::util::ValueExt;
 use anyhow::{Context, anyhow};
@@ -20,9 +20,11 @@ pub async fn run(client: &PveClient, ctx: &JobCtx, s: &Schedule) -> anyhow::Resu
     let g = GuestRef { node, kind: s.kind, vmid: s.vmid };
     match &s.action {
         ScheduleAction::Snapshot { keep } => {
-            let name = auto_snapshot_name(chrono::Local::now());
+            let name = auto_snapshot_name(&s.id, chrono::Local::now());
             guest::snapshot_create(client, ctx, &g, &name, "Automatic snapshot (PMXSpan schedule)", false).await?;
-            let mut autos: Vec<_> = guest::snapshots(client, &g).await?.into_iter().filter(|x| x.name.starts_with("auto-")).collect();
+            // Only this schedule's own snapshots count towards its retention.
+            let prefix = auto_snapshot_prefix(&s.id);
+            let mut autos: Vec<_> = guest::snapshots(client, &g).await?.into_iter().filter(|x| x.name.starts_with(&prefix)).collect();
             autos.sort_by_key(|x| x.snaptime);
             let excess = autos.len().saturating_sub((*keep).max(1) as usize);
             let mut pruned = Vec::new();

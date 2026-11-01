@@ -385,7 +385,8 @@ impl IpamDb {
     /// Allocates `count` addresses atomically: either all are recorded or none.
     /// A preferred address (if any) is the first one; the rest come from the same pool rules.
     pub fn allocate_many(&mut self, req: &AllocRequest, count: usize) -> anyhow::Result<Vec<Allocation>> {
-        let snapshot = (self.assignments.clone(), self.history.len());
+        // Whole copies: at the history cap, logging also drops old entries.
+        let snapshot = (self.assignments.clone(), self.history.clone());
         let mut out = Vec::new();
         for i in 0..count.max(1) {
             let r = if i == 0 { req.clone() } else { AllocRequest { preferred: None, ..req.clone() } };
@@ -393,7 +394,7 @@ impl IpamDb {
                 Ok(a) => out.push(self.record(&r, a)),
                 Err(e) => {
                     self.assignments = snapshot.0;
-                    self.history.truncate(snapshot.1);
+                    self.history = snapshot.1;
                     let done = if i > 0 { format!(" (only {i} of {count} were available)") } else { String::new() };
                     return Err(e.context(format!("could not allocate {count} address(es){done}")));
                 }

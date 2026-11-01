@@ -119,7 +119,8 @@ impl Schedule {
                     if !days.is_empty() && !days.contains(&wd) {
                         continue;
                     }
-                    let slot = Local.from_local_datetime(&date.and_time(t)).earliest()?;
+                    // A time inside a DST gap does not exist that day: skip the day.
+                    let Some(slot) = Local.from_local_datetime(&date.and_time(t)).earliest() else { continue };
                     if slot <= now {
                         return Some(slot.timestamp());
                     }
@@ -256,9 +257,36 @@ pub struct AutomationStore {
 
 impl AutomationStore {
     pub fn load(path: &Path) -> Self {
-        let mut s: Self = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let mut s: Self = match std::fs::read_to_string(path) {
+            Ok(t) => serde_json::from_str(&t).unwrap_or_else(|e| {
+                // Keep the unreadable file instead of overwriting it on the next save.
+                let keep = path.with_extension(format!("json.unreadable-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+                let _ = std::fs::rename(path, &keep);
+                tracing::error!("{} is not valid ({e}); moved it to {} and started empty", path.display(), keep.display());
+                Self::default()
+            }),
+            Err(_) => Self::default(),
+        };
         s.path = path.to_path_buf();
         s
+    }
+
+    /// Marks `ids` as run at `at` in the file itself (read, update, write), so
+    /// another runner reading it next sees them as done. Returns the ids that
+    /// were still due in the file, i.e. the ones this caller now owns.
+    pub fn claim(path: &Path, ids: &[String], at: i64, now: DateTime<Local>) -> anyhow::Result<Vec<String>> {
+        let mut disk = Self::load(path);
+        let mut owned = Vec::new();
+        for s in disk.schedules.iter_mut().filter(|s| ids.contains(&s.id)) {
+            if s.due(now) {
+                s.last_run = at;
+                owned.push(s.id.clone());
+            }
+        }
+        if !owned.is_empty() {
+            disk.save()?;
+        }
+        Ok(owned)
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
@@ -292,9 +320,16 @@ impl AutomationStore {
     }
 }
 
-/// Snapshot name for an automatic snapshot taken at `at`.
-pub fn auto_snapshot_name(at: DateTime<Local>) -> String {
-    format!("auto-{}", at.format("%Y%m%d-%H%M%S"))
+/// Name prefix of the snapshots one schedule takes. Retention only ever
+/// deletes snapshots with its own prefix, never other schedules' or the user's.
+pub fn auto_snapshot_prefix(schedule_id: &str) -> String {
+    let tag: String = schedule_id.chars().filter(char::is_ascii_alphanumeric).take(6).collect();
+    format!("auto-{tag}-")
+}
+
+/// Snapshot name for an automatic snapshot of `schedule_id` taken at `at`.
+pub fn auto_snapshot_name(schedule_id: &str, at: DateTime<Local>) -> String {
+    format!("{}{}", auto_snapshot_prefix(schedule_id), at.format("%Y%m%d-%H%M%S"))
 }
 
 /// Live usage of one guest, from two consecutive resource readings.
@@ -374,10 +409,15 @@ impl AlertMonitor {
                 },
             };
             for r in rules.iter().filter(|r| r.enabled && (r.server_id.is_empty() || r.server_id == server_id)) {
+                let key = (r.id.clone(), g.vmid);
                 if !r.vmids.is_empty() && !r.vmids.contains(&g.vmid) {
+                    // Out of the rule's scope (also after the rule was changed).
+                    self.over_since.remove(&key);
+                    if let Some(i) = self.active.iter().position(|a| a.rule_id == r.id && a.vmid == g.vmid) {
+                        self.resolve(i, now);
+                    }
                     continue;
                 }
-                let key = (r.id.clone(), g.vmid);
                 let value = s.get(r.metric);
                 let firing = self.active.iter().position(|a| a.rule_id == r.id && a.vmid == g.vmid);
                 if value > r.threshold {
@@ -412,8 +452,11 @@ impl AlertMonitor {
             self.resolve(i, now);
         }
         self.counters.retain(|v, _| seen.contains(v));
-        // Rules that were deleted or disabled resolve too.
-        let live: Vec<&str> = rules.iter().filter(|r| r.enabled).map(|r| r.id.as_str()).collect();
+        // A guest that stops starts counting from zero when it runs again.
+        self.over_since.retain(|(_, v), _| seen.contains(v));
+        // Rules that were deleted, disabled or moved to another server resolve too.
+        let live: Vec<&str> =
+            rules.iter().filter(|r| r.enabled && (r.server_id.is_empty() || r.server_id == server_id)).map(|r| r.id.as_str()).collect();
         let dead: Vec<usize> = (0..self.active.len()).rev().filter(|i| !live.contains(&self.active[*i].rule_id.as_str())).collect();
         for i in dead {
             self.resolve(i, now);
@@ -481,9 +524,35 @@ mod tests {
         s.last_run = at("2026-11-02 16:01").timestamp();
         assert!(!s.due(at("2026-11-02 21:00")));
         assert!(s.due(at("2026-11-02 22:02")));
-        assert_eq!(auto_snapshot_name(at("2026-11-02 22:02")), "auto-20261102-220200");
+        assert_eq!(auto_snapshot_name("3fa2c19e77", at("2026-11-02 22:02")), "auto-3fa2c1-20261102-220200");
+        assert!(auto_snapshot_name("3fa2c19e77", at("2026-11-02 22:02")).len() <= 40);
         assert!(Schedule { vmid: 100, server_id: "s".into(), when: When::EveryHours(0), ..s.clone() }.validate().is_err());
         assert!(Schedule { vmid: 100, server_id: "s".into(), ..s }.validate().is_ok());
+    }
+
+    #[test]
+    fn claiming_due_runs_in_the_file() {
+        let dir = std::env::temp_dir().join(format!("pmxspan-claim-{}", crate::config::new_id()));
+        let path = dir.join("automation.json");
+        let now = at("2026-11-02 03:05");
+        let mut st = AutomationStore::load(&path);
+        st.schedules.push(Schedule {
+            id: "a".into(),
+            vmid: 100,
+            server_id: "s".into(),
+            created: at("2026-11-01 12:00").timestamp(),
+            ..Default::default()
+        });
+        st.save().unwrap();
+        // The first claimer owns it; a second one sees it as already started.
+        assert_eq!(AutomationStore::claim(&path, &["a".into()], now.timestamp(), now).unwrap(), vec!["a".to_string()]);
+        assert!(AutomationStore::claim(&path, &["a".into()], now.timestamp(), now).unwrap().is_empty());
+        // An unreadable file is kept aside, never overwritten.
+        std::fs::write(&path, "{not json").unwrap();
+        let st = AutomationStore::load(&path);
+        assert!(st.schedules.is_empty());
+        assert!(std::fs::read_dir(&dir).unwrap().flatten().any(|e| e.file_name().to_string_lossy().contains("unreadable")));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -516,6 +585,14 @@ mod tests {
         m.feed("s", 500.0, &[g(0.99, 0.0)], &rules);
         assert_eq!(m.active.len(), 1);
         m.feed("s", 560.0, &[], &rules);
+        assert!(m.active.is_empty());
+        // After a stop, the duration counts again from the first new reading.
+        assert!(m.feed("s", 9000.0, &[g(0.99, 0.0)], &rules).is_empty());
+        // A rule narrowed to other guests resolves its alerts.
+        m.feed("s", 9200.0, &[g(0.99, 0.0)], &rules);
+        assert_eq!(m.active.len(), 1);
+        let narrowed = vec![AlertRule { vmids: vec![200], ..rule.clone() }, rate.clone()];
+        m.feed("s", 9260.0, &[g(0.99, 0.0)], &narrowed);
         assert!(m.active.is_empty());
     }
 }

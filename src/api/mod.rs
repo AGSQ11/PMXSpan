@@ -412,11 +412,21 @@ impl PveClient {
         }
         let mut file = tokio::fs::File::create(dest).await.with_context(|| format!("creating {}", dest.display()))?;
         let mut total = 0u64;
-        while let Some(chunk) = resp.chunk().await.map_err(|e| anyhow!("download interrupted: {}", error_chain(&e)))? {
-            file.write_all(&chunk).await?;
-            total += chunk.len() as u64;
+        let copied: anyhow::Result<()> = async {
+            while let Some(chunk) = resp.chunk().await.map_err(|e| anyhow!("download interrupted: {}", error_chain(&e)))? {
+                file.write_all(&chunk).await?;
+                total += chunk.len() as u64;
+            }
+            file.flush().await?;
+            Ok(())
         }
-        file.flush().await?;
+        .await;
+        if let Err(e) = copied {
+            // Never leave a truncated file behind that looks like a complete one.
+            drop(file);
+            let _ = tokio::fs::remove_file(dest).await;
+            return Err(e);
+        }
         Ok(total)
     }
 

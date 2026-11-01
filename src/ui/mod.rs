@@ -308,7 +308,7 @@ pub struct App {
     alerts: crate::automation::AlertMonitor,
     /// Resource list last fed to the alert monitor (by address).
     alerts_fed: usize,
-    last_schedule_check: Instant,
+    last_schedule_check: Option<Instant>,
     schedules_running: Arc<Mutex<HashSet<String>>>,
 }
 
@@ -348,7 +348,7 @@ impl App {
             automation_view: Default::default(),
             alerts: Default::default(),
             alerts_fed: 0,
-            last_schedule_check: Instant::now() - Duration::from_secs(3600),
+            last_schedule_check: None,
             schedules_running: Default::default(),
         };
         // An unprotected vault opens without prompting.
@@ -366,10 +366,15 @@ impl App {
 
     /// Starts due schedules of the connected server (checked twice a minute).
     fn run_due_schedules(&mut self) {
-        if self.last_schedule_check.elapsed() < Duration::from_secs(30) || self.session.is_none() {
+        // (Instant::now() minus a duration panics on Windows shortly after boot, hence the Option.)
+        if self.last_schedule_check.is_some_and(|t| t.elapsed() < Duration::from_secs(30)) || self.session.is_none() {
             return;
         }
-        self.last_schedule_check = Instant::now();
+        self.last_schedule_check = Some(Instant::now());
+        // `--run-schedules` is running right now: leave the due ones to it.
+        if crate::headless::lock_held(&self.paths.automation_file()) {
+            return;
+        }
         let now = chrono::Local::now();
         let due: Vec<_> = {
             let mut st = self.automation.lock();
@@ -378,20 +383,29 @@ impl App {
             st.schedules.iter().filter(|s| s.due(now)).cloned().collect()
         };
         for s in due {
-            self.start_schedule(s);
+            self.start_schedule(s, false);
         }
     }
 
-    fn start_schedule(&mut self, s: crate::automation::Schedule) {
+    /// Starts a schedule's run; `manual` for "Run now" (it need not be due).
+    fn start_schedule(&mut self, s: crate::automation::Schedule, manual: bool) {
         let Some(sess) = self.session.as_ref() else { return };
         if s.server_id != sess.shared.server_id || !self.schedules_running.lock().insert(s.id.clone()) {
             return;
         }
         let started = chrono::Utc::now().timestamp();
         {
-            // Mark it run right away so it is not started twice.
+            // Mark it run right away, in the file too, so neither this app nor
+            // `--run-schedules` starts it twice. "Run now" (not due) skips the file.
             let mut st = self.automation.lock();
+            st.merge_runs_from_disk();
             if let Some(x) = st.schedules.iter_mut().find(|x| x.id == s.id) {
+                if !manual && !x.due(chrono::Local::now()) {
+                    // `--run-schedules` took it meanwhile.
+                    drop(st);
+                    self.schedules_running.lock().remove(&s.id);
+                    return;
+                }
                 x.last_run = started;
             }
             let _ = st.save();
@@ -587,7 +601,7 @@ impl App {
                 Action::RunSchedule(id) => {
                     let s = self.automation.lock().schedules.iter().find(|s| s.id == id).cloned();
                     if let Some(s) = s {
-                        self.start_schedule(s);
+                        self.start_schedule(s, true);
                     }
                 }
                 Action::SetPoolLimits(pool, limits) => {
