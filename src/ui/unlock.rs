@@ -26,15 +26,7 @@ impl UnlockView {
         let p = theme::p();
         ui.vertical_centered(|ui| {
             ui.add_space(ui.available_height() * 0.16);
-            let (rect, _) = ui.allocate_exact_size(egui::vec2(52.0, 52.0), egui::Sense::hover());
-            ui.painter().rect_filled(rect, egui::CornerRadius::same(14), p.accent);
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                theme::icon::HARD_DRIVES,
-                egui::FontId::proportional(30.0),
-                p.on_accent,
-            );
+            super::icon::logo(ui, 56.0);
             ui.add_space(10.0);
             ui.label(theme::bold("PMXSpan", 26.0));
             ui.label(RichText::new("Desktop manager for Proxmox VE").color(p.muted));

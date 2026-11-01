@@ -815,15 +815,7 @@ impl App {
         egui::Panel::left("nav").frame(frame).default_size(250.0).min_size(200.0).max_size(380.0).show(ui, |ui| {
             // Brand
             ui.horizontal(|ui| {
-                let (rect, _) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::hover());
-                ui.painter().rect_filled(rect, egui::CornerRadius::same(8), p.accent);
-                ui.painter().text(
-                    rect.center(),
-                    egui::Align2::CENTER_CENTER,
-                    theme::icon::HARD_DRIVES,
-                    egui::FontId::proportional(17.0),
-                    p.on_accent,
-                );
+                icon::logo(ui, 28.0);
                 ui.label(theme::bold("PMXSpan", 15.5));
             });
             ui.add_space(10.0);
