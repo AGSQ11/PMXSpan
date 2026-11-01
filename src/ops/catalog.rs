@@ -78,6 +78,10 @@ pub fn check_config_key(virt: &str, key: &str, value: &str) -> anyhow::Result<()
     if value.chars().any(char::is_control) {
         bail!("config value of `{key}` contains control characters");
     }
+    // Any other serial value is a host device path (`/dev/...`) passed to the guest.
+    if key == "serial0" && value.trim() != "socket" {
+        bail!("config value of `serial0` must be `socket` (host serial devices are not allowed in a catalog)");
+    }
     if key == "features" {
         for (k, v) in crate::util::PropString::parse(value).parts {
             if !LXC_FEATURES.contains(&k.as_str()) || !matches!(v.as_str(), "0" | "1") {
@@ -804,6 +808,9 @@ mod tests {
         assert!(cfg("qemu", "hookscript", "local:snippets/x.sh").contains("not allowed"));
         assert!(cfg("qemu", "cicustom", "user=local:snippets/u.yml").contains("not allowed"));
         assert!(cfg("qemu", "net0", "virtio,bridge=vmbr1,firewall=0").contains("not allowed"));
+        assert!(cfg("qemu", "serial0", "/dev/ttyS0").contains("must be `socket`"));
+        assert!(cfg("qemu", "serial0", "/dev/tty1").contains("must be `socket`"));
+        assert!(check_config_key("qemu", "serial0", "socket").is_ok());
         assert!(
             CatalogEntry::from_value(
                 &json!({"id": "a", "label": "A", "virt": "lxc", "url": "https://x/y.tar.zst",
