@@ -108,8 +108,10 @@ impl Schedule {
             When::EveryHours(h) => {
                 let every = i64::from((*h).max(1)) * 3600;
                 let anchor = self.last_run.max(self.created);
-                let next = anchor + every;
-                (now.timestamp() >= next).then_some(next)
+                let elapsed = now.timestamp() - anchor;
+                // The latest slot on the interval grid, so a long gap (app
+                // closed, no headless runner) resumes instead of stalling.
+                (elapsed >= every).then(|| anchor + elapsed / every * every)
             }
             When::Daily { at, days } => {
                 let t = NaiveTime::parse_from_str(at.trim(), "%H:%M").ok()?;
@@ -524,6 +526,10 @@ mod tests {
         s.last_run = at("2026-11-02 16:01").timestamp();
         assert!(!s.due(at("2026-11-02 21:00")));
         assert!(s.due(at("2026-11-02 22:02")));
+        // Missed for days: the latest grid slot is due, not the stale first one.
+        let late = Schedule { last_run: at("2026-11-02 16:00").timestamp(), when: When::EveryHours(1), ..s.clone() };
+        assert!(late.due(at("2026-11-05 09:30")));
+        assert_eq!(late.last_slot(at("2026-11-05 09:30")), Some(at("2026-11-05 09:00").timestamp()));
         assert_eq!(auto_snapshot_name("3fa2c19e77", at("2026-11-02 22:02")), "auto-3fa2c1-20261102-220200");
         assert!(auto_snapshot_name("3fa2c19e77", at("2026-11-02 22:02")).len() <= 40);
         assert!(Schedule { vmid: 100, server_id: "s".into(), when: When::EveryHours(0), ..s.clone() }.validate().is_err());
