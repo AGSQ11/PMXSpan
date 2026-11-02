@@ -283,3 +283,22 @@ Run the unit tests with `cargo test`. They cover IPAM allocation rules (main add
 ## Credits
 
 Bundled fonts: [Inter](https://rsms.me/inter/) and [JetBrains Mono](https://www.jetbrains.com/lp/mono/) (SIL Open Font License 1.1), and icons from [Phosphor](https://phosphoricons.com/) (MIT). Their licenses are in `assets/fonts/`.
+
+---
+
+## Repository statistics
+
+<p align="center">
+  <a href="https://github.com/AGSQ11/PMXSpan/stargazers"><img alt="GitHub stars" src="https://img.shields.io/github/stars/AGSQ11/PMXSpan?style=flat-square&logo=github&label=Stars"></a>
+  <a href="https://github.com/AGSQ11/PMXSpan/forks"><img alt="GitHub forks" src="https://img.shields.io/github/forks/AGSQ11/PMXSpan?style=flat-square&logo=github&label=Forks"></a>
+  <a href="https://github.com/AGSQ11/PMXSpan/issues"><img alt="Open GitHub issues" src="https://img.shields.io/github/issues/AGSQ11/PMXSpan?style=flat-square&logo=github&label=Open%20issues"></a>
+  <a href="https://github.com/AGSQ11/PMXSpan/graphs/contributors"><img alt="GitHub contributors" src="https://img.shields.io/github/contributors/AGSQ11/PMXSpan?style=flat-square&logo=github&label=Contributors"></a>
+</p>
+
+<p align="center">
+  <a href="https://github.com/AGSQ11/PMXSpan/releases"><img alt="Total GitHub release downloads" src="https://img.shields.io/github/downloads/AGSQ11/PMXSpan/total?style=flat-square&logo=github&label=Release%20downloads"></a>
+  <a href="https://github.com/AGSQ11/PMXSpan/releases/latest"><img alt="Latest GitHub release" src="https://img.shields.io/github/v/release/AGSQ11/PMXSpan?style=flat-square&logo=github&label=Latest%20release"></a>
+  <a href="https://github.com/AGSQ11/PMXSpan/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/AGSQ11/PMXSpan?style=flat-square&logo=github&label=Last%20commit"></a>
+</p>
+
+<p align="center"><sub>Live repository metrics. Download counts reflect GitHub release assets only, not clones or installs.</sub></p>
