@@ -12,6 +12,19 @@ PMXSpan is a standalone desktop app for managing Proxmox VE clusters, written in
 </p>
 <p align="center"><sub>Graphite (dark) and Daylight (light). Every screenshot in this README was taken against the bundled mock cluster. More in <a href="#screenshots">Screenshots</a>.</sub></p>
 
+## Why PMXSpan
+
+I built PMXSpan to automate three jobs I did by hand on Proxmox VE:
+
+1. **Reinstall VMs and containers** without losing the VMID, NICs or IPs.
+2. **Deploy from current OS images.** PMXSpan gets the latest official
+   cloud images directly from the vendors. No old templates.
+3. **Assign IPs automatically** from local IPv4/IPv6 pools (IPAM),
+   and show drift against the cluster.
+
+One desktop app for all your clusters. No web server, no database,
+no agents on the nodes.
+
 ## Features
 
 | Area | What you get |
