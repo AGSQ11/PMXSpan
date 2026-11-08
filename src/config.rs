@@ -317,6 +317,11 @@ pub struct Settings {
     pub sshspan_path: String,
     /// The automatically found SSHSpan executable the user confirmed once.
     pub sshspan_approved_path: String,
+    /// Run the local MCP server (loopback only, bearer token in the vault).
+    pub mcp_enabled: bool,
+    pub mcp_port: u16,
+    /// Offer the non-destructive action tools over MCP.
+    pub mcp_allow_actions: bool,
 }
 
 impl Default for Settings {
@@ -345,6 +350,9 @@ impl Default for Settings {
             sshspan_enabled: true,
             sshspan_path: String::new(),
             sshspan_approved_path: String::new(),
+            mcp_enabled: false,
+            mcp_port: crate::mcp::DEFAULT_PORT,
+            mcp_allow_actions: false,
         }
     }
 }

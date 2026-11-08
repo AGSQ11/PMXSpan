@@ -14,6 +14,7 @@ mod integrations;
 mod ipam;
 mod jobs;
 mod logging;
+mod mcp;
 mod ops;
 mod pubkeys;
 mod rt;
