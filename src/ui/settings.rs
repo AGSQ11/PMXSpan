@@ -11,6 +11,7 @@ pub struct SettingsView {
     new_master2: String,
     log_filter: String,
     tab: u8,
+    pubkeys: super::pubkeys::Picker,
 }
 
 impl SettingsView {
@@ -107,6 +108,9 @@ impl SettingsView {
                         .font(egui::TextStyle::Monospace),
                 );
                 ui.end_row();
+                ui.label("");
+                self.pubkeys.button(ui);
+                ui.end_row();
                 ui.label("Task watch timeout");
                 ui.add(egui::DragValue::new(&mut s.task_timeout_secs).range(60..=86400).suffix(" s"));
                 ui.end_row();
@@ -141,6 +145,9 @@ impl SettingsView {
                 ui.end_row();
             });
         });
+        if let Some(m) = self.pubkeys.show(ui.ctx(), "settings", &mut s.default_ssh_keys) {
+            actions.toast_ok(m);
+        }
         if serde_json::to_string(s).unwrap_or_default() != before {
             actions.0.push(Action::ConfigChanged);
         }

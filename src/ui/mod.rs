@@ -14,6 +14,7 @@ pub mod icon;
 mod ipam_view;
 mod jobs_panel;
 mod node;
+mod pubkeys;
 mod servers;
 mod settings;
 mod storage;
