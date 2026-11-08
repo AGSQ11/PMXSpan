@@ -137,7 +137,7 @@ impl GuestView {
             spawn_power(sh, &g, &res, a);
         }
 
-        self.header(ui, sh, &g, &res);
+        self.header(ui, sh, &g, &res, actions);
         let mut tabs = vec![(Tab::Summary, "Summary"), (Tab::Hardware, "Hardware"), (Tab::Network, "Network"), (Tab::Ips, "IP addresses")];
         if self.kind == GuestKind::Qemu {
             tabs.push((Tab::CloudInit, "Cloud-Init"));
@@ -171,7 +171,16 @@ impl GuestView {
         });
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, sh: &Shared, g: &GuestRef, res: &Resource) {
+    /// Whether the Cloud-Init tab is showing (a key from SSHSpan can go there).
+    pub fn cloudinit_open(&self) -> bool {
+        self.tab == Tab::CloudInit
+    }
+
+    pub fn add_cloudinit_key(&mut self, key: &crate::sshkey::PublicKey) -> bool {
+        self.cloudinit.add_ssh_key(key)
+    }
+
+    fn header(&mut self, ui: &mut egui::Ui, sh: &Shared, g: &GuestRef, res: &Resource, actions: &mut Actions) {
         let p = theme::p();
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(42.0, 42.0), egui::Sense::hover());
@@ -278,6 +287,15 @@ impl GuestView {
                     .clicked()
                 {
                     let _ = webbrowser::open(&guest::console_url(&sh.client, g, &res.name));
+                }
+                if crate::ui::integration::sshspan_button(
+                    ui,
+                    &sh.settings,
+                    "Connect with SSHSpan",
+                    "Open an SSH session to this guest in SSHSpan (you confirm the address, user and port first)",
+                    crate::ui::integration::ButtonStyle::Primary,
+                ) {
+                    actions.0.push(crate::ui::Action::Integration(crate::ui::integration::Request::ConnectGuest(g.kind, g.vmid)));
                 }
             });
         });

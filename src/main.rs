@@ -35,6 +35,12 @@ fn main() -> eframe::Result {
         std::process::exit(headless::run_schedules(&paths));
     }
 
+    // Single instance: a second start hands its pmxspan:// link to the
+    // running window and exits.
+    if let integrations::ipc::Instance::Forwarded = integrations::ipc::start(&paths, integrations::ipc::link_args()) {
+        return Ok(());
+    }
+
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("PMXSpan")

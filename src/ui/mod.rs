@@ -11,6 +11,7 @@ mod dashboard;
 mod guest;
 mod guests;
 pub mod icon;
+mod integration;
 mod ipam_view;
 mod jobs_panel;
 mod node;
@@ -84,6 +85,8 @@ pub enum Action {
     /// Set (or clear, when unlimited) a tenant pool's limits on the connected server.
     SetPoolLimits(String, crate::config::PoolLimits),
     ConfigChanged,
+    /// SSHSpan: connect to a guest or node, or the bulk handoff.
+    Integration(integration::Request),
 }
 
 #[derive(Default)]
@@ -311,6 +314,7 @@ pub struct App {
     alerts_fed: usize,
     last_schedule_check: Option<Instant>,
     schedules_running: Arc<Mutex<HashSet<String>>>,
+    integration: integration::IntegrationUi,
 }
 
 impl App {
@@ -352,6 +356,7 @@ impl App {
             alerts_fed: 0,
             last_schedule_check: None,
             schedules_running: Default::default(),
+            integration: Default::default(),
         };
         // An unprotected vault opens without prompting.
         if let Some(v) = app.vault.as_mut()
@@ -647,6 +652,7 @@ impl App {
                         s.shared.profile = p.clone();
                     }
                 }
+                Action::Integration(r) => self.integration_request(r),
                 Action::ConfigChanged => {
                     self.save_config();
                     if let Some(s) = self.session.as_mut() {
@@ -1249,8 +1255,13 @@ impl eframe::App for App {
             self.central(ui, &mut actions);
         });
         self.totp_window(&ctx);
+        self.integration_windows(&ctx, &mut actions);
         self.toasts_ui(&ctx);
         self.process(actions);
+    }
+
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.integration_logic(ctx);
     }
 
     fn on_exit(&mut self) {

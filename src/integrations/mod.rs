@@ -7,6 +7,7 @@
 //! public keys, fingerprints and display names.
 
 pub mod bundle;
+pub mod ipc;
 pub mod link;
 pub mod resolve;
 pub mod sshspan;

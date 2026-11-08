@@ -33,6 +33,7 @@ pub struct GuestsView {
 impl GuestsView {
     pub fn ui(&mut self, ui: &mut egui::Ui, sh: &Shared, actions: &mut Actions) {
         let mut export = false;
+        let mut send_sshspan = false;
         if let Some((g, a)) = widgets::confirm_ui(ui.ctx(), &mut self.confirm) {
             let c = sh.client.clone();
             sh.spawn(format!("{} {} {}", a.label(), g.kind.label(), g.vmid), move |ctx| async move { guest::power(&c, &ctx, &g, a).await });
@@ -58,6 +59,13 @@ impl GuestsView {
                 .button(format!("{}  Export configs…", theme::icon::DOWNLOAD))
                 .on_hover_text("Save the config, firewall, HA and IPAM records of the guests listed below to a JSON file")
                 .clicked();
+            send_sshspan = super::integration::sshspan_button(
+                ui,
+                &sh.settings,
+                "Send to SSHSpan…",
+                "Review the guests listed below (and optionally the nodes), then hand them to SSHSpan in one go",
+                super::integration::ButtonStyle::Normal,
+            );
         });
         let f = self.filter.to_lowercase();
         let mut rows: Vec<&Resource> = sh
@@ -86,6 +94,11 @@ impl GuestsView {
             sh.spawn(format!("Export {} guest config(s)", items.len()), move |ctx| {
                 crate::ops::export::export(c, ctx, p, ipam, items, path)
             });
+        }
+        if send_sshspan {
+            let listed: Vec<u64> = rows.iter().filter(|r| !r.template).map(|r| r.vmid).collect();
+            // Nothing listed: start from every guest.
+            actions.0.push(super::Action::Integration(super::integration::Request::SendBulk(listed)));
         }
         rows.sort_by(|a, b| {
             let o = match self.sort {
@@ -216,6 +229,15 @@ impl GuestsView {
                             }
                             if ui.small_button("Console").clicked() {
                                 let _ = webbrowser::open(&guest::console_url(&sh.client, &gr, &g.name));
+                            }
+                            if super::integration::sshspan_button(
+                                ui,
+                                &sh.settings,
+                                "SSH",
+                                "Connect with SSHSpan",
+                                super::integration::ButtonStyle::Small,
+                            ) {
+                                actions.0.push(super::Action::Integration(super::integration::Request::ConnectGuest(kind, g.vmid)));
                             }
                         });
                         ui.end_row();
