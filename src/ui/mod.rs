@@ -13,6 +13,7 @@ mod guests;
 pub mod icon;
 mod ipam_view;
 mod jobs_panel;
+mod mcp_settings;
 mod node;
 mod servers;
 mod settings;
@@ -310,11 +311,14 @@ pub struct App {
     alerts_fed: usize,
     last_schedule_check: Option<Instant>,
     schedules_running: Arc<Mutex<HashSet<String>>>,
+    /// The optional local MCP server (off unless enabled in the settings).
+    mcp: crate::mcp::McpHost,
 }
 
 impl App {
     pub fn new(paths: AppPaths) -> Self {
         let paths_automation = paths.automation_file();
+        let mcp = crate::mcp::McpHost::new(&paths);
         let config = AppConfig::load(&paths.config_file());
         let ipam = Arc::new(Mutex::new(IpamDb::load(&paths.ipam_file())));
         let catalog = Arc::new(Mutex::new(CatalogStore::load(&paths.catalog_file())));
@@ -350,6 +354,7 @@ impl App {
             alerts_fed: 0,
             last_schedule_check: None,
             schedules_running: Default::default(),
+            mcp,
         };
         // An unprotected vault opens without prompting.
         if let Some(v) = app.vault.as_mut()
@@ -444,6 +449,15 @@ impl App {
         }
     }
 
+    /// Starts / stops the MCP server to match the settings and feeds it the
+    /// current connection. Nothing happens while it is disabled.
+    fn tick_mcp(&mut self) {
+        let connected = self.session.as_ref().map(|s| (&s.shared.client, &s.shared.profile));
+        if let Some(err) = self.mcp.tick(&self.config.settings, &self.config.profiles, self.vault.as_mut(), connected, &self.ipam) {
+            self.toast(ToastLevel::Error, err);
+        }
+    }
+
     fn vault_protected(&self) -> bool {
         self.vault.as_ref().is_some_and(Vault::is_protected)
     }
@@ -470,6 +484,7 @@ impl App {
         if let Some(v) = self.vault.as_mut() {
             v.lock();
         }
+        self.mcp.on_lock();
         self.session = None;
         self.connecting = None;
         self.totp = None;
@@ -1230,6 +1245,7 @@ impl eframe::App for App {
         }
         self.run_due_schedules();
         self.feed_alerts();
+        self.tick_mcp();
         ctx.request_repaint_after(every);
 
         let mut actions = Actions::default();
@@ -1252,6 +1268,7 @@ impl eframe::App for App {
     }
 
     fn on_exit(&mut self) {
+        self.mcp.shutdown();
         let _ = self.config.save(&self.paths.config_file());
     }
 }

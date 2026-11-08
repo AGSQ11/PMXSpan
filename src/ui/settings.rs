@@ -11,6 +11,7 @@ pub struct SettingsView {
     new_master2: String,
     log_filter: String,
     tab: u8,
+    mcp: super::mcp_settings::McpPanel,
 }
 
 impl SettingsView {
@@ -19,11 +20,13 @@ impl SettingsView {
             ui.selectable_value(&mut self.tab, 0, "Preferences");
             ui.selectable_value(&mut self.tab, 1, "Security");
             ui.selectable_value(&mut self.tab, 2, "Application log");
+            ui.selectable_value(&mut self.tab, 3, "MCP server");
         });
         ui.separator();
         match self.tab {
             0 => self.prefs(ui, config, actions),
             1 => self.security(ui, vault, paths, actions),
+            3 => self.mcp.ui(ui, config, vault, paths, actions),
             _ => self.logs(ui, paths),
         }
     }

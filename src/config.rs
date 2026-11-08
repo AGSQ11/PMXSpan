@@ -299,6 +299,11 @@ pub struct Settings {
     pub backup_before_rebuild: bool,
     /// Preferred storage for those backups (empty = first backup storage).
     pub rebuild_backup_storage: String,
+    /// Run the local MCP server (loopback only, bearer token in the vault).
+    pub mcp_enabled: bool,
+    pub mcp_port: u16,
+    /// Offer the non-destructive action tools over MCP.
+    pub mcp_allow_actions: bool,
 }
 
 impl Default for Settings {
@@ -324,6 +329,9 @@ impl Default for Settings {
             download_min_bytes: 0,
             backup_before_rebuild: true,
             rebuild_backup_storage: String::new(),
+            mcp_enabled: false,
+            mcp_port: crate::mcp::DEFAULT_PORT,
+            mcp_allow_actions: false,
         }
     }
 }

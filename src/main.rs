@@ -12,6 +12,7 @@ mod headless;
 mod ipam;
 mod jobs;
 mod logging;
+mod mcp;
 mod ops;
 mod rt;
 mod ui;
