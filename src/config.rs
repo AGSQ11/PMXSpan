@@ -311,6 +311,12 @@ pub struct Settings {
     pub backup_before_rebuild: bool,
     /// Preferred storage for those backups (empty = first backup storage).
     pub rebuild_backup_storage: String,
+    /// Show the SSHSpan actions (connect, send to SSHSpan). Off hides them all.
+    pub sshspan_enabled: bool,
+    /// SSHSpan executable chosen by the user (empty = find it automatically).
+    pub sshspan_path: String,
+    /// The automatically found SSHSpan executable the user confirmed once.
+    pub sshspan_approved_path: String,
 }
 
 impl Default for Settings {
@@ -336,6 +342,9 @@ impl Default for Settings {
             download_min_bytes: 0,
             backup_before_rebuild: true,
             rebuild_backup_storage: String::new(),
+            sshspan_enabled: true,
+            sshspan_path: String::new(),
+            sshspan_approved_path: String::new(),
         }
     }
 }

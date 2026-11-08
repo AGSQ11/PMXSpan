@@ -10,6 +10,7 @@ mod automation;
 mod config;
 mod headless;
 mod hostkeys;
+mod integrations;
 mod ipam;
 mod jobs;
 mod logging;
