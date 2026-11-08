@@ -24,7 +24,7 @@ egui = "0.37"
 egui_plot = "0.38"
 futures-util = "0.3.34"
 hex = "0.4.3"
-hyper = "1"
+hyper = { version = "1", features = ["server", "http1"] }
 ipnet = "2.12.2"
 parking_lot = "0.13.0"
 rand = "0.8"
@@ -34,13 +34,17 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 sha2 = "0.10"
-tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "time", "sync", "macros", "fs", "io-util", "net"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 urlencoding = "2.1.3"
 webbrowser = "1.2.5"
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rand_core", "encryption"] }
 zeroize = "1.8"
+# MCP server (src/mcp): local, opt-in Streamable HTTP endpoint for AI assistants.
+hyper-util = { version = "0.1.21", features = ["tokio", "server", "server-graceful", "http1"] }
+http-body-util = "0.1.5"
+subtle = "2.6"
 
 [profile.release]
 opt-level = 3
