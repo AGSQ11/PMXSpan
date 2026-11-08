@@ -18,6 +18,7 @@ pub struct SummaryTab {
     traffic: Fetch<Traffic>,
     traffic_since: Option<i64>,
     ips: Fetch<Vec<(String, Vec<String>)>>,
+    hostkeys: super::hostkeys_card::HostKeysCard,
 }
 
 impl SummaryTab {
@@ -49,6 +50,8 @@ impl SummaryTab {
                 c[1].vertical(|ui| {
                     self.ips_card(ui, gc);
                     ui.add_space(14.0);
+                    self.hostkeys.ui(ui, gc);
+                    ui.add_space(14.0);
                     self.traffic_card(ui);
                 });
             });
@@ -56,6 +59,8 @@ impl SummaryTab {
             self.resources_card(ui, gc);
             ui.add_space(14.0);
             self.ips_card(ui, gc);
+            ui.add_space(14.0);
+            self.hostkeys.ui(ui, gc);
             ui.add_space(14.0);
             self.traffic_card(ui);
         }

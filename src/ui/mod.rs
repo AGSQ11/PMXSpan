@@ -316,6 +316,7 @@ pub struct App {
 impl App {
     pub fn new(paths: AppPaths) -> Self {
         let paths_automation = paths.automation_file();
+        crate::hostkeys::init(&paths.hostkeys_file());
         let config = AppConfig::load(&paths.config_file());
         let ipam = Arc::new(Mutex::new(IpamDb::load(&paths.ipam_file())));
         let catalog = Arc::new(Mutex::new(CatalogStore::load(&paths.catalog_file())));

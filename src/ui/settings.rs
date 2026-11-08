@@ -183,6 +183,7 @@ impl SettingsView {
             widgets::kv(ui, "Config", paths.config_file().display().to_string());
             widgets::kv(ui, "Vault", paths.vault_file().display().to_string());
             widgets::kv(ui, "IPAM database", paths.ipam_file().display().to_string());
+            widgets::kv(ui, "SSH host keys", paths.hostkeys_file().display().to_string());
             widgets::kv(ui, "Logs", paths.log_dir.display().to_string());
         });
         widgets::muted(ui, "Tip: create an empty file named 'portable' next to the executable to keep all data beside it.");

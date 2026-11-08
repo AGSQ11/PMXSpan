@@ -60,6 +60,18 @@ impl AppPaths {
     pub fn automation_file(&self) -> PathBuf {
         self.config_dir.join("automation.json")
     }
+    /// SSH host keys read from guests (next to the IPAM database).
+    pub fn hostkeys_file(&self) -> PathBuf {
+        self.data_dir.join("hostkeys.json")
+    }
+    /// Whether everything is kept beside the executable (`portable` marker).
+    #[cfg_attr(not(unix), allow(dead_code))]
+    pub fn is_portable(&self) -> bool {
+        std::env::current_exe()
+            .ok()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .is_some_and(|dir| dir.join("portable").exists() && self.data_dir == dir.join("data"))
+    }
 }
 
 /// Moves data left by the app's earlier name (ProxmoxPanel) to the new

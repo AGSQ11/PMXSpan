@@ -531,6 +531,7 @@ pub async fn destroy(
         if !released.is_empty() {
             ctx.info(format!("released IPAM addresses: {}", released.join(", ")));
         }
+        crate::hostkeys::forget(server_id, g.vmid);
     }
     Ok(format!("{} {} destroyed", g.kind.label(), g.vmid))
 }

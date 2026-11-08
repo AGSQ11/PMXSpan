@@ -586,6 +586,10 @@ pub async fn run(env: Env, mut spec: CreateSpec, ctx: JobCtx) -> anyhow::Result<
             Err(e) => ctx.warn(format!("the guest was created but adding it to HA failed: {e:#}")),
         }
     }
+    if spec.start && spec.agent && kind == GuestKind::Qemu {
+        let catalog_id = if let Source::Catalog { entry } = &spec.source { entry.id.as_str() } else { "" };
+        crate::hostkeys::after_provision(client, &ctx, &env.server_id, &g, catalog_id, false);
+    }
     let ipdesc = ips.summary();
     Ok(format!(
         "{} {vmid} '{}' created on {node}{}",

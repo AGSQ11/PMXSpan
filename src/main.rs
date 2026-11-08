@@ -9,6 +9,7 @@ mod api;
 mod automation;
 mod config;
 mod headless;
+mod hostkeys;
 mod ipam;
 mod jobs;
 mod logging;

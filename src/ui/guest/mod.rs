@@ -5,6 +5,7 @@ mod backups;
 pub mod cloudinit;
 mod firewall;
 mod hardware;
+mod hostkeys_card;
 mod ips;
 mod manage;
 mod network;
