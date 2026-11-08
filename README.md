@@ -53,6 +53,9 @@ no agents on the nodes.
 | **Create extras** | **Custom cloud-init** files (`cicustom` user/vendor/network snippets from the nodes, with a default per catalog image), **HA** on create (default per catalog image, optional group), and a generated **Ed25519 key pair** (private key saved locally, optionally passphrase-protected; the public key goes into the guest). |
 | **Recovery copies** | Export the config, firewall, HA settings, snapshot names and IPAM records of one guest or of every listed guest to a JSON file. |
 | **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
+| **SSHSpan integration** | With [SSHSpan](#working-with-sshspan) installed, **Connect with SSHSpan** on a guest, a guest row or a node opens an SSH session there after you confirm the address, user and port, and **Send to SSHSpan…** hands many guests (and nodes) over at once after a review. SSHSpan can send back "open this guest" links and public keys, which always land in a confirmation card. Only names, addresses, user names and public keys cross; never a password or private key. Without SSHSpan the buttons are disabled with a hint, or hidden in Settings. |
+| **SSH host keys** | PMXSpan reads each VM's SSH host keys through the guest agent (Refresh on the Summary, and automatically after its own create and rebuild) and shows their SHA-256 fingerprints with a copy button, so you can check the first connection with any SSH client. A rebuild that changes the keys is recorded as a rotation. |
+| **Public keys from this computer** | **Add from this computer…** in the create wizard, the Cloud-Init tab and Settings lists the `~/.ssh/*.pub` files (type, comment, fingerprint), skips keys already in the field and marks files it cannot read. |
 
 ### Not included yet
 
@@ -222,9 +225,13 @@ Browser consoles need you to be logged in to the Proxmox web UI in that browser.
 | | Linux | Windows |
 |---|---|---|
 | Config, vault, OS catalog, schedules and alert rules | `~/.config/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\config\` |
-| IPAM database, logs | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
+| IPAM database, SSH host keys (`hostkeys.json`), logs | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
+| SSHSpan handoff files (deleted after 24 h) | `$XDG_RUNTIME_DIR/pmxspan/handoff/` (else `~/.local/share/pmxspan/handoff/`) | `%LOCALAPPDATA%\PMXSpan\handoff\` |
+| Single-instance socket | `$XDG_RUNTIME_DIR/pmxspan/ipc.sock` (else in the data folder) | named pipe `\\.\pipe\pmxspan-<hash>` |
 
-**Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it.
+**Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it (including the single-instance socket).
+
+On macOS the handoff files go to `~/Library/Application Support/pmxspan/handoff/`.
 
 Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose logs.
 
@@ -254,9 +261,27 @@ On Windows, create a Task Scheduler task that runs every 5 minutes with the prog
 
 Proxmox's API cannot upload snippets, so put your cloud-init files on the nodes yourself, in a storage with the `snippets` content type (for `local` that is `/var/lib/vz/snippets/`). PMXSpan lists them in the create wizard, the Cloud-Init tab and per catalog image (*OS image catalog → Custom cloud-init*, stored on this computer only and never exported or imported), and sets the VM's `cicustom`. Rebuilds keep it.
 
+## Working with SSHSpan
+
+[SSHSpan](https://github.com/AGSQ11/SSHSpan) is an SSH client and key manager. PMXSpan works the same without it; with it, guests and nodes open in SSH in one click and their host keys are checked against the ones PMXSpan read.
+
+**What crosses, and what never does.** PMXSpan hands SSHSpan host names and addresses, ports, user names, display names, the server profile's id and name, pool and node names, guest tags and the public SSH host keys it read. SSHSpan hands PMXSpan "open this guest/node" requests and public keys. Passwords, API tokens, private keys and vault contents never cross, and nothing received is applied on its own.
+
+**Finding SSHSpan.** PMXSpan looks for SSHSpan when you first see one of its buttons: the path set in **Settings → SSHSpan** (absolute, an existing file, `.exe` on Windows), then on Windows the installed-programs registry, `%ProgramFiles%\SSHSpan\sshspan.exe`, `%LOCALAPPDATA%\Programs\SSHSpan\sshspan.exe` and `PATH`, and on Linux/macOS `PATH`, `/usr/bin`, `/usr/local/bin`, `~/.local/bin`, `/opt/SSHSpan/sshspan`, `~/Applications/SSHSpan*.AppImage` and `/Applications/SSHSpan.app`. The first time it starts a program it found on its own, it shows you the exact path and asks; it asks again if that path changes. Without an executable it uses the `sshspan://` link handler registered with the system, if there is one. Otherwise the SSHSpan buttons are disabled with the hint *"SSHSpan was not found on this computer. Install it or set its path in Settings."* Untick **SSHSpan actions** in Settings to hide them all.
+
+**Connect with SSHSpan** (guest header, guest list, node page). The address is the guest's IPAM main IPv4, else its IPAM main IPv6, else an address its guest agent reports (no loopback or link-local, IPv4 first), else a container's static `ip=`. The user is the VM's cloud-init user, else the catalog image's default user, else `root`; containers and nodes use `root`, and nodes use their cluster address from `/cluster/status`. A small card shows host, user and port (you can change them; PMXSpan remembers your values for that guest until it closes) and the host-key status, then SSHSpan's Quick connect dialog opens prefilled.
+
+**Host keys.** PMXSpan sends the host keys it read as *proposed* keys: SSHSpan accepts a server silently only when its live key matches one, refuses with both fingerprints when it differs, and after a PMXSpan rebuild (the link then says when the keys rotated) offers to replace the key it saved. Keys that changed without a rebuild are shown with a warning on the Summary and are never presented as a rotation. Containers and nodes have no host-key source in the Proxmox API; SSHSpan then asks you to trust the key on first connect, as usual.
+
+**Send to SSHSpan…** (Guests toolbar). A review lists every guest of the connected server, the ones in your current list filter ticked, with the address, user, the SSHSpan category it will go to (*Proxmox › server › pool*, or *no pool*), the host-key status, and why a row cannot be sent (no address, an invalid user name). Nodes can be added with a tick. **Send** writes the list to a private handoff file (mode 0600 in a 0700 folder, see Data locations) and opens SSHSpan's own import review, which checks the file's SHA-256 and age before reading it. Handoff files left behind are deleted when PMXSpan next starts.
+
+**Links from SSHSpan.** SSHSpan opens `pmxspan://guest?v=1&cluster=<profile id>&vmid=<id>` and `pmxspan://node?v=1&cluster=<profile id>&node=<name>` ("Manage in PMXSpan") and `pmxspan://add-key?v=1&key=<public key line>&name=<key name>`. Every link is validated (version 1 only, at most 8192 bytes, every field checked) and a bad one is refused with a message. A locked vault is unlocked first (the link waits up to 10 minutes); connecting to a different server asks first; then the guest or node page opens and the window comes to the front. An offered key is shown with its type, SHA-256 fingerprint and comment, and is added only where you choose: Settings' default SSH keys, the open Create wizard, or the open Cloud-Init tab (saved with that form). Keys already there are reported, not added twice.
+
+**One window.** Starting PMXSpan while it is already running brings the running window to the front, and a `pmxspan://` link given to the second start is handed over to it (through a socket only your user can open, at most 64 KiB per message). `pmxspan --run-schedules` is not affected. The Debian package, AppImage and Windows installer register PMXSpan for `pmxspan://` links.
+
 ## Trying it without a cluster
 
-`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules and ipsets, backups (including a Proxmox Backup Server storage with browsable files), cloud-init snippets, URL downloads (any URL containing `404` fails like a missing image), IPAM-friendly networking and a guest agent. Start it with:
+`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules and ipsets, backups (including a Proxmox Backup Server storage with browsable files), cloud-init snippets, URL downloads (any URL containing `404` fails like a missing image), IPAM-friendly networking and a guest agent (which also returns SSH host keys for VMs). Start it with:
 
 ```bash
 python3 tools/mock_pve.py --port 8006
@@ -279,6 +304,11 @@ src/
                 config export, schedules
   automation.rs schedules, due-time logic and usage alerts
   headless.rs   `pmxspan --run-schedules`
+  integrations/ SSHSpan: discovery and launch, sshspan:// / pmxspan:// links, handoff bundle,
+                address resolution, single-instance IPC
+  hostkeys.rs   guest SSH host keys (hostkeys.json)
+  sshkey.rs     SSH public key lines and SHA-256 fingerprints
+  pubkeys.rs    ~/.ssh/*.pub listing for the key picker
   ipam.rs       local IP address management
   vault.rs      encrypted credential storage
   jobs.rs       background jobs with step logs
@@ -291,7 +321,7 @@ tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
-Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations.
+Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations, and for the SSHSpan integration: link building and percent-encoding (IPv6, unicode, the 8192-byte cap), `pmxspan://` parsing and every refusal, the handoff bundle (JSON shape, SHA-256, private file mode), host-key parsing, fingerprints against known `ssh-keygen -l` values and rotation rules, address/user resolution order, SSHSpan discovery against a fake `PATH`, the single-instance socket and its framing, and the public-key picker.
 
 ## Credits
 

@@ -127,6 +127,12 @@ Section "PMXSpan (required)" SecMain
   WriteRegStr HKLM "${UNINSTKEY}" "QuietUninstallString" '"$INSTDIR\uninstall.exe" /S'
   WriteRegDWORD HKLM "${UNINSTKEY}" "NoModify" 1
   WriteRegDWORD HKLM "${UNINSTKEY}" "NoRepair" 1
+
+  ; pmxspan:// links (sent by SSHSpan) open in PMXSpan.
+  WriteRegStr HKLM "Software\Classes\pmxspan" "" "URL:PMXSpan link"
+  WriteRegStr HKLM "Software\Classes\pmxspan" "URL Protocol" ""
+  WriteRegStr HKLM "Software\Classes\pmxspan\DefaultIcon" "" "$INSTDIR\pmxspan.exe,0"
+  WriteRegStr HKLM "Software\Classes\pmxspan\shell\open\command" "" '"$INSTDIR\pmxspan.exe" "%1"'
 SectionEnd
 
 Section "Desktop shortcut" SecDesktop
@@ -153,5 +159,6 @@ Section "Uninstall"
   Delete "$DESKTOP\${APPNAME}.lnk"
   DeleteRegKey HKLM "${UNINSTKEY}"
   DeleteRegKey HKLM "Software\${APPNAME}"
+  DeleteRegKey HKLM "Software\Classes\pmxspan"
   ; User data (servers, encrypted vault, IPAM database, logs) in %APPDATA%\PMXSpan is kept.
 SectionEnd

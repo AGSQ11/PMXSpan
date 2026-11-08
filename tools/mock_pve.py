@@ -30,6 +30,13 @@ import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, unquote, urlparse
 
+# Public host keys returned for `cat /etc/ssh/ssh_host_*_key.pub` through the
+# guest agent (GitHub's published host keys: public, with known fingerprints).
+MOCK_HOST_KEYS = (
+    "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl root@vm%(vmid)s\n"
+    "ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZMy7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg= root@vm%(vmid)s\n"
+)
+
 LOCK = threading.Lock()
 NOW = lambda: int(time.time())  # noqa: E731
 
@@ -641,8 +648,13 @@ class Handler(BaseHTTPRequestHandler):
                                    {"name": "eth0", "ip-addresses": [{"ip-address": f"10.0.0.{vmid % 200}", "prefix": 24},
                                                                      {"ip-address": "fe80::1", "prefix": 64}]}]}
             if cmd == "exec":
-                return {"pid": 4242}
+                argv = a.get("command", "")
+                argv = " ".join(argv) if isinstance(argv, list) else argv
+                # Reading the SSH host keys gets a separate pid so its output differs.
+                return {"pid": 4243 if "ssh_host_" in argv else 4242}
             if cmd.startswith("exec-status"):
+                if str(a.get("pid")) == "4243":
+                    return {"exited": 1, "exitcode": 0, "out-data": MOCK_HOST_KEYS % {"vmid": vmid}}
                 return {"exited": 1, "exitcode": 0, "out-data": "hello from the mock guest agent\n"}
             if cmd == "set-user-password":
                 return None
