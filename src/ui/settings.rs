@@ -140,6 +140,7 @@ impl SettingsView {
                 });
                 ui.end_row();
             });
+            super::console::settings_section(ui, s);
         });
         if serde_json::to_string(s).unwrap_or_default() != before {
             actions.0.push(Action::ConfigChanged);

@@ -263,21 +263,8 @@ impl GuestView {
                         self.power(sh, g, res, a);
                     }
                 }
-                if g.kind == GuestKind::Qemu
-                    && running
-                    && widgets::icon_button(ui, theme::icon::DESKTOP, "SPICE")
-                        .on_hover_text("Requires a SPICE display and virt-viewer")
-                        .clicked()
-                {
-                    let (c, gr) = (sh.client.clone(), g.clone());
-                    sh.spawn(format!("SPICE console {}", g.vmid), move |_ctx| async move { guest::open_spice(&c, &gr).await });
-                }
-                if widgets::icon_button(ui, theme::icon::TERMINAL, "Console")
-                    .on_hover_text("Opens the Proxmox console in your browser (log in to the web UI there if asked)")
-                    .clicked()
-                {
-                    let _ = webbrowser::open(&guest::console_url(&sh.client, g, &res.name));
-                }
+                // In-app console first; browser console and SPICE in its menu.
+                super::console::guest_console_buttons(ui, sh, g, res, self.config.ok());
             });
         });
         ui.add_space(6.0);

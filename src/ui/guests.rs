@@ -214,8 +214,8 @@ impl GuestsView {
                                     }
                                 }
                             }
-                            if ui.small_button("Console").clicked() {
-                                let _ = webbrowser::open(&guest::console_url(&sh.client, &gr, &g.name));
+                            if ui.small_button("Console").on_hover_text("Opens the console in a PMXSpan window").clicked() {
+                                super::console::open_target(sh, crate::console::primary_target(&gr), &g.display_name());
                             }
                         });
                         ui.end_row();
