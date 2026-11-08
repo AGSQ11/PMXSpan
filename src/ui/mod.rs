@@ -6,6 +6,7 @@ mod automation_view;
 mod catalog_view;
 mod charts;
 mod cluster;
+pub mod console;
 mod create;
 mod dashboard;
 mod guest;
@@ -472,7 +473,7 @@ impl App {
     /// Locks a protected vault after the configured idle time. Waits for
     /// running jobs, which still hold their own connection.
     fn auto_lock(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| !i.events.is_empty()) {
+        if ctx.input(|i| !i.events.is_empty()) | console::take_activity() {
             self.last_activity = Instant::now();
         }
         let mins = self.config.settings.auto_lock_mins;
@@ -492,6 +493,7 @@ impl App {
             v.lock();
         }
         self.mcp.on_lock();
+        console::close_all();
         self.session = None;
         self.connecting = None;
         self.totp = None;
@@ -616,6 +618,7 @@ impl App {
                 }
                 Action::Connect(id) => self.connect(&id, None),
                 Action::Disconnect => {
+                    console::close_all();
                     self.session = None;
                     self.nav = Nav::Servers;
                 }
@@ -1272,6 +1275,7 @@ impl eframe::App for App {
         });
         self.totp_window(&ctx);
         self.integration_windows(&ctx, &mut actions);
+        console::show_windows(&ctx, &self.config.settings);
         self.toasts_ui(&ctx);
         self.process(actions);
     }

@@ -9,6 +9,13 @@ It serves HTTPS with a throwaway self-signed certificate (generated with
   - password login:  root@pam / mockpass   (TOTP code 123456 for totp@pam)
   - API token:       root@pam!pmxspan = mocktoken
 
+Consoles: `vncproxy`, `termproxy` and `vncwebsocket` work like on a real node.
+The VNC console is an RFB 3.8 server (security type None, Raw encoding) that
+shows a moving test pattern; the terminal console speaks the termproxy
+protocol and runs a real `bash` on a pty on Linux (an echo shell elsewhere,
+or with MOCK_ECHO=1). Key, pointer and resize events are printed to stdout
+as `MOCK-VNC ...` / `MOCK-TERM ...` lines. VM 100 has a serial port, 101 not.
+
 State (guests, tasks, snapshots, firewall rules, backups...) lives in memory
 and is lost on exit. Write operations return UPIDs whose tasks finish after
 ~1.5 seconds, so the app's task waiting / job log behave realistically.
@@ -16,12 +23,16 @@ and is lost on exit. Write operations return UPIDs whose tasks finish after
 
 import argparse
 import base64
+import hashlib
 import io
 import json
 import os
 import random
 import re
+import select
 import ssl
+import struct
+import sys
 import subprocess
 import tempfile
 import threading
@@ -112,6 +123,7 @@ add_guest("qemu", 9001, "pve2", "ubuntu-24.04-cloud", template=1, disk_gb=4)
 GUESTS[101]["cfg"]["ipconfig0"] = "ip=10.20.0.21/24,gw=10.20.0.1"
 GUESTS[102]["cfg"]["net0"] = GUESTS[102]["cfg"]["net0"].replace("ip=dhcp", "ip=10.20.0.53/24,gw=10.20.0.1")
 GUESTS[103]["cfg"]["tags"] = "test;PMXSpan"
+GUESTS[100]["cfg"]["serial0"] = "socket"
 SNAPSHOTS[100] = [{"name": "before_upgrade", "description": "pre apt upgrade", "snaptime": NOW() - 86400 * 3}]
 FIREWALL[100]["rules"] = [
     {"pos": 0, "type": "in", "action": "ACCEPT", "enable": 1, "macro": "SSH", "comment": "admin ssh"},
@@ -254,6 +266,288 @@ def rrd(points=70, step=60, node=False):
     return out
 
 
+# ---- consoles -------------------------------------------------------------
+
+CONSOLE_TICKETS = {}  # ticket -> {kind, port, prefix, user, created}
+WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+
+
+def log(*parts):
+    print(*parts, flush=True)
+
+
+def new_console_ticket(kind, prefix, user, prefix_name):
+    port = random.randint(5900, 5999)
+    ticket = f"{prefix_name}:{user}::{base64.b64encode(os.urandom(18)).decode()}"
+    reply = {"port": str(port), "user": user, "upid": f"UPID:mock:{kind}proxy", "cert": "mock"}
+    if kind == "vnc":
+        # Like current Proxmox VE: a generated 8-character VNC password, and the
+        # ticket returned as "password:ticket" for clients that still send the
+        # whole ticket as the VNC password.
+        password = "".join(random.choice("!#$%&()*+,-./0123456789ABCDEFGHJKLMNPQRSTUVWXYZ") for _ in range(8))
+        ticket = f"{password}:{ticket}"
+        reply["password"] = password
+    CONSOLE_TICKETS[ticket] = {"kind": kind, "port": port, "prefix": prefix, "user": user, "ticket": ticket, "created": time.time()}
+    reply["ticket"] = ticket
+    return reply
+
+
+class WebSocket:
+    """A minimal RFC 6455 server endpoint on a blocking (TLS) socket."""
+
+    def __init__(self, sock):
+        self.sock, self.raw, self.parts, self.closed = sock, b"", b"", False
+
+    def readable(self, timeout):
+        if self.sock.pending():
+            return True
+        return bool(select.select([self.sock], [], [], timeout)[0])
+
+    def send(self, payload, opcode=2):
+        n = len(payload)
+        head = bytes([0x80 | opcode])
+        if n < 126:
+            head += bytes([n])
+        elif n < 65536:
+            head += bytes([126]) + struct.pack(">H", n)
+        else:
+            head += bytes([127]) + struct.pack(">Q", n)
+        self.sock.sendall(head + payload)
+
+    def close(self, code=1000):
+        if not self.closed:
+            self.closed = True
+            try:
+                self.send(struct.pack(">H", code), opcode=8)
+            except OSError:
+                pass
+
+    def receive(self):
+        """Reads what is available and returns the complete data messages."""
+        try:
+            data = self.sock.recv(65536)
+        except (OSError, ssl.SSLError):
+            data = b""
+        if not data:
+            self.closed = True
+            return []
+        self.raw += data
+        out = []
+        while len(self.raw) >= 2:
+            b0, b1 = self.raw[0], self.raw[1]
+            fin, opcode, masked, n, i = b0 & 0x80, b0 & 0x0F, b1 & 0x80, b1 & 0x7F, 2
+            if n == 126:
+                if len(self.raw) < 4:
+                    break
+                n, i = struct.unpack(">H", self.raw[2:4])[0], 4
+            elif n == 127:
+                if len(self.raw) < 10:
+                    break
+                n, i = struct.unpack(">Q", self.raw[2:10])[0], 10
+            if not masked:  # client frames must be masked (RFC 6455 5.1)
+                self.close(1002)
+                return out
+            if len(self.raw) < i + 4 + n:
+                break
+            mask, payload = self.raw[i:i + 4], self.raw[i + 4:i + 4 + n]
+            self.raw = self.raw[i + 4 + n:]
+            payload = bytes(c ^ mask[k % 4] for k, c in enumerate(payload))
+            if opcode == 8:
+                self.close()
+                return out
+            if opcode == 9:
+                self.send(payload, opcode=10)
+            elif opcode in (0, 1, 2):
+                self.parts += payload
+                if fin:
+                    out.append(self.parts)
+                    self.parts = b""
+        return out
+
+
+def rfb_session(ws, vmid):
+    """RFB 3.8, security type None, Raw encoding, a moving test pattern."""
+    width, height, inbuf = 320, 200, bytearray()
+    fmt = {"bpp": 32, "big": 0, "rs": 16, "gs": 8, "bs": 0}
+
+    def need(n, timeout=10.0):
+        end = time.time() + timeout
+        while len(inbuf) < n:
+            if ws.closed or time.time() > end:
+                raise EOFError
+            if ws.readable(0.2):
+                for m in ws.receive():
+                    inbuf.extend(m)
+        data = bytes(inbuf[:n])
+        del inbuf[:n]
+        return data
+
+    def pixel(r, g, b):
+        v = (r << fmt["rs"]) | (g << fmt["gs"]) | (b << fmt["bs"])
+        return struct.pack(">I" if fmt["big"] else "<I", v)
+
+    def frame(n):
+        stripes = [(200, 40, 40), (40, 200, 40), (40, 40, 200), (200, 200, 40), (40, 200, 200), (200, 40, 200), (230, 230, 230), (20, 20, 20)]
+        row = b"".join(pixel(*c) * (width // len(stripes)) for c in stripes)
+        x, bar = (n * 8) % width, 12
+        row = row[:x * 4] + pixel(255, 255, 255) * min(bar, width - x) + row[(x + bar) * 4:]
+        return row[:width * 4] * height
+
+    try:
+        ws.send(b"RFB 003.008\n")
+        log(f"MOCK-VNC client version {need(12).decode(errors='replace').strip()}")
+        ws.send(bytes([1, 1]))  # one security type: None
+        if need(1)[0] != 1:
+            return
+        ws.send(struct.pack(">I", 0))  # SecurityResult OK
+        need(1)  # ClientInit (shared flag)
+        name = f"mock VM {vmid}".encode()
+        pf = struct.pack(">BBBBHHHBBB3x", 32, 24, 0, 1, 255, 255, 255, 16, 8, 0)
+        ws.send(struct.pack(">HH", width, height) + pf + struct.pack(">I", len(name)) + name)
+        pending, n, last = False, 0, 0.0
+        while not ws.closed:
+            if ws.readable(0.1):
+                for m in ws.receive():
+                    inbuf.extend(m)
+            while inbuf:
+                t = inbuf[0]
+                if t == 0 and len(inbuf) >= 20:  # SetPixelFormat
+                    m = need(20)
+                    bpp, _, big, _, _, _, _, rs, gs, bs = struct.unpack(">BBBBHHHBBB", m[4:17])
+                    fmt.update(bpp=bpp, big=big, rs=rs, gs=gs, bs=bs)
+                elif t == 2 and len(inbuf) >= 4 and len(inbuf) >= 4 + 4 * struct.unpack(">H", inbuf[2:4])[0]:
+                    cnt = struct.unpack(">H", inbuf[2:4])[0]
+                    encs = struct.unpack(f">{cnt}i", need(4 + 4 * cnt)[4:])
+                    log(f"MOCK-VNC encodings {list(encs)}")
+                elif t == 3 and len(inbuf) >= 10:  # FramebufferUpdateRequest
+                    incremental = need(10)[1]
+                    pending = True
+                    if not incremental:
+                        last = 0.0
+                elif t == 4 and len(inbuf) >= 8:  # KeyEvent
+                    m = need(8)
+                    log(f"MOCK-VNC key 0x{struct.unpack('>I', m[4:8])[0]:x} {'down' if m[1] else 'up'}")
+                elif t == 5 and len(inbuf) >= 6:  # PointerEvent
+                    m = need(6)
+                    x, y = struct.unpack(">HH", m[2:6])
+                    if m[1]:
+                        log(f"MOCK-VNC pointer {x},{y} buttons {m[1]}")
+                elif t == 6 and len(inbuf) >= 8 and len(inbuf) >= 8 + struct.unpack(">I", inbuf[4:8])[0]:
+                    ln = struct.unpack(">I", inbuf[4:8])[0]
+                    log(f"MOCK-VNC clipboard {need(8 + ln)[8:].decode('latin-1')!r}")
+                elif t in (0, 2, 3, 4, 5, 6):
+                    break  # wait for the rest of the message
+                else:
+                    log(f"MOCK-VNC unknown message {t}")
+                    return
+            if pending and time.time() - last >= 0.5:
+                n, last, pending = n + 1, time.time(), False
+                ws.send(struct.pack(">BxH", 0, 1) + struct.pack(">HHHHi", 0, 0, width, height, 0) + frame(n))
+    except (EOFError, OSError, ssl.SSLError):
+        pass
+    finally:
+        ws.close()
+        log("MOCK-VNC closed")
+
+
+def term_session(ws, t):
+    """The termproxy protocol: `user:ticket\n`, `OK`, then 0:/1:/2 frames."""
+    inbuf = bytearray()
+    end = time.time() + 10
+    while b"\n" not in inbuf:
+        if ws.closed or time.time() > end:
+            ws.close()
+            return
+        if ws.readable(0.2):
+            for m in ws.receive():
+                inbuf.extend(m)
+    line, _, rest = bytes(inbuf).partition(b"\n")
+    inbuf = bytearray(rest)
+    user, _, ticket = line.decode(errors="replace").partition(":")
+    # The real termproxy checks the user with /access/ticket, which rejects token ids.
+    if user != t["user"] or ticket != t["ticket"] or "!" in user:
+        log(f"MOCK-TERM auth rejected for {user!r}")
+        ws.close()
+        return
+    ws.send(b"OK")
+    log(f"MOCK-TERM login {user}")
+    pid, fd = None, None
+    if sys.platform.startswith("linux") and not os.environ.get("MOCK_ECHO"):
+        import pty
+        pid, fd = pty.fork()
+        if pid == 0:
+            env = {"TERM": "xterm-256color", "PS1": "mock$ ", "HOME": os.environ.get("HOME", "/"), "PATH": os.environ.get("PATH", "/usr/bin:/bin")}
+            try:
+                os.execvpe("bash", ["bash", "--norc", "--noprofile", "-i"], env)
+            finally:
+                os._exit(127)
+    else:
+        ws.send(b"mock echo shell\r\nmock$ ")
+
+    def handle(data):
+        if fd is not None:
+            os.write(fd, data)
+        else:
+            ws.send(data.replace(b"\r", b"\r\n"))
+
+    try:
+        while not ws.closed:
+            socks = [ws.sock] + ([fd] if fd is not None else [])
+            ready = [ws.sock] if ws.sock.pending() else select.select(socks, [], [], 0.5)[0]
+            if ws.sock in ready:
+                for m in ws.receive():
+                    inbuf.extend(m)
+            while inbuf:
+                kind = inbuf[:1]
+                if kind == b"2":
+                    del inbuf[:1]
+                    log("MOCK-TERM ping")
+                    continue
+                mt = re.match(rb"0:(\d+):", inbuf) if kind == b"0" else re.match(rb"1:(\d+):(\d+):", inbuf)
+                if kind not in (b"0", b"1"):
+                    log(f"MOCK-TERM bad frame {bytes(inbuf[:20])!r}")
+                    return
+                if not mt:
+                    break
+                if kind == b"1":
+                    cols, rows = int(mt.group(1)), int(mt.group(2))
+                    del inbuf[:mt.end()]
+                    log(f"MOCK-TERM resize {cols}x{rows}")
+                    if fd is not None:
+                        import fcntl
+                        import termios
+                        fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
+                    continue
+                n = int(mt.group(1))
+                if len(inbuf) < mt.end() + n:
+                    break
+                data = bytes(inbuf[mt.end():mt.end() + n])
+                del inbuf[:mt.end() + n]
+                log(f"MOCK-TERM input {data!r}")
+                handle(data)
+            if fd is not None and fd in ready:
+                try:
+                    out = os.read(fd, 65536)
+                except OSError:
+                    out = b""
+                if not out:
+                    break
+                ws.send(out)
+    except (OSError, ssl.SSLError):
+        pass
+    finally:
+        ws.close()
+        if pid:
+            try:
+                os.kill(pid, 9)
+                os.waitpid(pid, 0)
+            except OSError:
+                pass
+        if fd is not None:
+            os.close(fd)
+        log("MOCK-TERM closed")
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
 
@@ -281,6 +575,37 @@ class Handler(BaseHTTPRequestHandler):
                 for k, v in parse_qs(raw.decode(errors="replace"), keep_blank_values=True).items():
                     q[k] = v[-1] if len(v) == 1 else v
         return q
+
+    def caller(self):
+        if self.headers.get("Authorization", "").startswith("PVEAPIToken="):
+            return "root@pam!pmxspan"
+        return "totp@pam" if "PVE:totp@pam:MOCK" in self.headers.get("Cookie", "") else "root@pam"
+
+    def websocket(self, p, args):
+        t = CONSOLE_TICKETS.pop(args.get("vncticket", ""), None)
+        if not t or str(t["port"]) != str(args.get("port")) or time.time() - t["created"] > 10 or not p.startswith(t["prefix"]):
+            return self.reply(None, 401, "permission denied - invalid vnc ticket")
+        key = self.headers.get("Sec-WebSocket-Key", "")
+        accept = base64.b64encode(hashlib.sha1((key + WS_GUID).encode()).digest()).decode()
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", accept)
+        self.send_header("Sec-WebSocket-Protocol", "binary")
+        self.end_headers()
+        self.wfile.flush()
+        self.close_connection = True
+        # Our clients send nothing before the 101, so rfile holds no frames.
+        ws = WebSocket(self.connection)
+        if t["kind"] == "vnc":
+            rfb_session(ws, t["prefix"].rstrip("/").split("/")[-1])
+        else:
+            term_session(ws, t)
+        try:
+            self.connection.unwrap()  # TLS close_notify, like a well-behaved server
+        except (OSError, ssl.SSLError, ValueError):
+            pass
+        return None
 
     def authed(self):
         auth = self.headers.get("Authorization", "")
@@ -324,6 +649,10 @@ class Handler(BaseHTTPRequestHandler):
             return self.reply(None, 401, "authentication failure")
         if not self.authed():
             return self.reply(None, 401, "No ticket")
+        if p.endswith("/vncwebsocket") and method == "GET":
+            if self.headers.get("Upgrade", "").lower() != "websocket":
+                return self.reply(None, 400, "websocket upgrade required")
+            return self.websocket(p, args)
         with LOCK:
             try:
                 res = self.dispatch(method, p, args)
@@ -556,6 +885,8 @@ class Handler(BaseHTTPRequestHandler):
                         opts = ",".join(o for o in opts.split(",") if o and not o.startswith("import-from=") and not o.startswith("size="))
                         g[k] = f"{mt.group(1)}:vm-{vmid}-disk-{k},size={size}G" + (f",{opts}" if opts else "")
             return new_task(node, "qmcreate" if kind == "qemu" else "vzcreate", vmid, duration=2.5)
+        if rest == "/termproxy" and method == "POST":
+            return new_console_ticket("term", f"/nodes/{node}/", self.caller(), "PVETERM")
         gm = re.fullmatch(r"/(qemu|lxc)/(\d+)(/.*)?", rest)
         if not gm:
             return NotImplemented
@@ -722,6 +1053,19 @@ class Handler(BaseHTTPRequestHandler):
                     r["pos"] = i
                 return None
             return rules
+        if sub in ("/vncproxy", "/termproxy") and method == "POST":
+            if g["status"] != "running":
+                raise ValueError(f"VM {vmid} not running")
+            prefix = f"/nodes/{node}/{kind}/{vmid}/"
+            if sub == "/vncproxy":
+                if kind != "qemu":
+                    raise ValueError("vncproxy: use termproxy for containers")
+                return new_console_ticket("vnc", prefix, self.caller(), "PVEVNC")
+            if kind == "qemu":
+                serial = a.get("serial", "serial0")
+                if serial not in cfg:
+                    raise ValueError(f"serial: VM {vmid} has no serial port '{serial}'")
+            return new_console_ticket("term", prefix, self.caller(), "PVETERM")
         if sub == "/spiceproxy":
             return {"type": "spice", "host": "pvespiceproxy:mock", "password": "x", "proxy": "http://localhost:3128"}
         return NotImplemented

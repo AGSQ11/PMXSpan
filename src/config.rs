@@ -322,6 +322,14 @@ pub struct Settings {
     pub mcp_port: u16,
     /// Offer the non-destructive action tools over MCP.
     pub mcp_allow_actions: bool,
+    /// In-app terminal consoles: font size in points.
+    pub console_font_size: f32,
+    /// In-app terminal consoles: scrollback lines.
+    pub console_scrollback: usize,
+    /// In-app VNC consoles: scale the display to the window (else 1:1).
+    pub console_vnc_fit: bool,
+    /// Ask before pasting several lines into a terminal console.
+    pub console_confirm_paste: bool,
 }
 
 impl Default for Settings {
@@ -353,6 +361,10 @@ impl Default for Settings {
             mcp_enabled: false,
             mcp_port: crate::mcp::DEFAULT_PORT,
             mcp_allow_actions: false,
+            console_font_size: 13.0,
+            console_scrollback: 5000,
+            console_vnc_fit: true,
+            console_confirm_paste: true,
         }
     }
 }

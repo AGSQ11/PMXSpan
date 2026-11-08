@@ -8,6 +8,7 @@
 mod api;
 mod automation;
 mod config;
+mod console;
 mod headless;
 mod hostkeys;
 mod integrations;

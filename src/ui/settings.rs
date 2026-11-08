@@ -148,6 +148,7 @@ impl SettingsView {
                 ui.end_row();
             });
             super::integration::settings_section(ui, s);
+            super::console::settings_section(ui, s);
         });
         if let Some(m) = self.pubkeys.show(ui.ctx(), "settings", &mut s.default_ssh_keys) {
             actions.toast_ok(m);

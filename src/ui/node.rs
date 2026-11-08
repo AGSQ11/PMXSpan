@@ -101,6 +101,10 @@ impl NodeView {
                 {
                     actions.0.push(super::Action::SetMaintenance(node.clone(), !maint));
                 }
+                if ui.button(format!("{}  Shell", theme::icon::TERMINAL)).on_hover_text("Opens a node shell in a PMXSpan window").clicked()
+                {
+                    super::console::open_target(sh, crate::console::ConsoleTarget::NodeShell(node.clone()), &node);
+                }
                 if ui.button("Shell (browser)").clicked() {
                     let _ = webbrowser::open(&crate::ops::guest::node_shell_url(&sh.client, &node));
                 }

@@ -46,6 +46,14 @@ hyper-util = { version = "0.1.21", features = ["tokio", "server", "server-gracef
 http-body-util = "0.1.5"
 subtle = "2.6"
 
+# In-app consoles (VNC viewer and terminal over Proxmox's vncwebsocket).
+# The WebSocket runs on the connection reqwest already upgraded, so no TLS
+# features (and no second TLS stack) are needed here.
+tokio-tungstenite = { version = "0.30", default-features = false }
+vnc-rs = "0.6"
+vt100 = "0.18"
+sha1 = "0.10"
+
 # SSHSpan integration: the Windows registry (peer discovery, scheme probe)
 # and ShellExecute (opening a registered sshspan:// link).
 
