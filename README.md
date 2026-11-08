@@ -53,6 +53,7 @@ no agents on the nodes.
 | **Create extras** | **Custom cloud-init** files (`cicustom` user/vendor/network snippets from the nodes, with a default per catalog image), **HA** on create (default per catalog image, optional group), and a generated **Ed25519 key pair** (private key saved locally, optionally passphrase-protected; the public key goes into the guest). |
 | **Recovery copies** | Export the config, firewall, HA settings, snapshot names and IPAM records of one guest or of every listed guest to a JSON file. |
 | **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
+| **MCP server** | Optional and **off by default**: a local [MCP](https://modelcontextprotocol.io/) endpoint so AI assistants on this computer (such as SSHSpan's) can read the connected cluster (guests, IPs, tasks, backups, IPAM) and, only if you allow it, run a few non-destructive actions. Loopback only, bearer token kept in the vault, every action audited. See [MCP server](#mcp-server-for-ai-assistants-such-as-sshspans). |
 
 ### Not included yet
 
@@ -222,7 +223,7 @@ Browser consoles need you to be logged in to the Proxmox web UI in that browser.
 | | Linux | Windows |
 |---|---|---|
 | Config, vault, OS catalog, schedules and alert rules | `~/.config/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\config\` |
-| IPAM database, logs | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
+| IPAM database, logs, MCP audit log (`mcp-audit.log`) | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
 
 **Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it.
 
@@ -249,6 +250,49 @@ crontab -e
 ```
 
 On Windows, create a Task Scheduler task that runs every 5 minutes with the program `C:\Program Files\PMXSpan\pmxspan.exe` and the arguments `--run-schedules --password-file C:\Users\me\pmxspan-master.txt`. Missed runs are caught up for a while (snapshots up to 6 hours late, power actions up to 30 minutes), never repeated. Alerts are only checked while the app is open.
+
+## MCP server (for AI assistants such as SSHSpan's)
+
+PMXSpan can act as a local **MCP (Model Context Protocol) server**, so an AI assistant on the same computer can look at your cluster through PMXSpan: which VM a terminal is connected to, what state it is in, its IPs, snapshots, backups and recent tasks. Its first user is SSHSpan's AI assistant, but it is a plain MCP server (Streamable HTTP, protocol revisions 2025-11-25, 2025-06-18 and 2025-03-26) that any MCP client can use.
+
+- **Off by default.** Turn it on in **Settings → MCP server**. While it is off nothing listens, and PMXSpan, `--run-schedules` and everything else behave exactly as before.
+- **Local only.** It listens on `127.0.0.1:48731` (and `[::1]` when available; the port is configurable) at the path `/mcp`, refuses non-loopback peers, `Host` headers and browser `Origin`s that are not loopback, bodies over 1 MiB and more than 32 connections at once.
+- **Token.** Every request needs `Authorization: Bearer <token>`. The token (32 random bytes, base64url) is generated when you first enable the server, stored encrypted in the vault, and shown once; **Regenerate** replaces it and ends every session.
+- **Only while unlocked.** The server runs while PMXSpan is open and the vault is unlocked. Locking the vault, switching it off, changing the port or quitting stops it (open requests get 2 seconds to finish). It is never started by `--run-schedules`.
+- **Answers for the connected server.** Every tool takes an optional `server` (profile id or name) and answers only for the server PMXSpan is connected to; for any other it says to connect first.
+
+**Read-only tools** (always available while the server runs):
+
+| Tool | What it returns |
+|---|---|
+| `list_servers` | The server profiles and which one is connected. |
+| `list_nodes` | Nodes with status, CPU, memory, uptime and maintenance mode. |
+| `list_guests` | VMs and containers (filter by name, tag, pool, status, node) with VMID, kind, node, status, pool, tags and main IPs from IPAM and recently seen guest-agent addresses. |
+| `get_guest` | One guest: status, resources, node, pool, tags, HA state, all known IPs (IPAM, static config, guest agent), snapshot names and a configuration summary without secrets. |
+| `find_by_ip` | Which guest (or node) owns an address: IPAM first, then the nodes, static guest network config, then the guest agents and container interfaces of running guests. SSHSpan uses it to map a terminal tab to a VM. |
+| `ipam_lookup` | Who holds an address, or whether it is free and in which pool; without an address, the pools with used and free counts. |
+| `list_tasks` | Recent tasks (optionally for one guest or node). |
+| `get_task_log` | A task's status and the tail of its log. |
+| `get_node_status` | A node's CPU, load, memory, swap, root disk, kernel, version and uptime. |
+| `list_backups` | Backups on the backup storages, newest first, optionally for one guest or node. |
+| `list_snapshots` | A guest's snapshots. |
+| `list_ipam_drift` | Differences between IPAM and the guests' network configuration. |
+
+**Action tools** appear only when **Allow actions over MCP** is on (off by default): `power` (start, shutdown, reboot, stop, suspend, resume; waits up to 30 s and returns the UPID), `snapshot_create`, `agent_exec` (runs a program through the QEMU guest agent, output capped at 16 KiB, refused when the agent is not running) and `set_tags`.
+
+**Always refused**, even with actions allowed: destroy, rebuild/reinstall, snapshot rollback, deleting snapshots or backups, restore, migrate, firewall and access changes (users, tokens, ACLs, passwords). A client that asks for one gets a message saying to do it in PMXSpan itself.
+
+**Audit.** Every action attempt, allowed or refused, is written to PMXSpan's log (with its arguments, after the usual credential redaction) and appended to `mcp-audit.log` in the data folder as one line: time, session id, tool, SHA-256 of the arguments and the outcome (`ok`, `error` or `refused`), for example `2026-11-08T12:34:56Z session=3f9c… tool=power args_sha256=5b1e… outcome=ok`.
+
+**Tool definitions are stable.** Clients such as SSHSpan pin a hash of each tool definition and ask you to approve a tool again when it changes, so names, descriptions and schemas do not change between restarts or releases unless a release says so (a test keeps them identical to `tests/mcp_tools.golden.json`).
+
+### Connecting SSHSpan
+
+1. In PMXSpan: **Settings → MCP server**, tick **Enabled**, and copy the token it shows.
+2. In SSHSpan: **Settings → AI assistant → MCP servers → Add MCP server**: name `pmxspan`, URL `http://127.0.0.1:48731/mcp` (or your port), auth **Bearer**, and paste the token as the secret. SSHSpan warns that plain `http://` is only allowed for loopback addresses; that is expected here, since the connection never leaves your computer.
+3. Enable the PMXSpan tools you want in SSHSpan's tool list.
+
+Other MCP clients: Streamable HTTP transport, the same URL and header `Authorization: Bearer <token>`. The server answers `POST` with `application/json`, `DELETE` ends a session, and `GET` returns 405 (it offers no event stream).
 
 ## Custom cloud-init files
 
@@ -282,6 +326,7 @@ src/
   ipam.rs       local IP address management
   vault.rs      encrypted credential storage
   jobs.rs       background jobs with step logs
+  mcp/          optional local MCP server: HTTP endpoint, JSON-RPC protocol, tools, audit log
   rt.rs         UI <-> tokio bridge (Fetch handles)
   ui/           egui views
 assets/fonts/   bundled fonts and their licenses
@@ -291,7 +336,7 @@ tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
-Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations.
+Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing, moving data to new folder locations, and the MCP server (auth, Origin/peer checks, sessions, JSON-RPC errors, action gating, the audit log, the tool-definition golden file, plus end-to-end runs against `tools/mock_pve.py` including SSHSpan's exact request sequence; skipped when `python3` or `openssl` is missing).
 
 ## Credits
 
