@@ -52,7 +52,7 @@ no agents on the nodes.
 | **Placement controls** | A **VMID range** per server (new guests and clones get the lowest free ID in it) and **maintenance mode** for nodes, which auto-placement skips. |
 | **Create extras** | **Custom cloud-init** files (`cicustom` user/vendor/network snippets from the nodes, with a default per catalog image), **HA** on create (default per catalog image, optional group), and a generated **Ed25519 key pair** (private key saved locally, optionally passphrase-protected; the public key goes into the guest). |
 | **Recovery copies** | Export the config, firewall, HA settings, snapshot names and IPAM records of one guest or of every listed guest to a JSON file. |
-| **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
+| **Consoles** | **In-app consoles** in their own windows: a VNC viewer for VM displays and a terminal for container consoles, VM serial ports and node shells, over the same authenticated connection as the rest of the app (no browser login, VNC works with API tokens). The Proxmox web console (noVNC/xterm.js in your browser) and SPICE (virt-viewer) stay available from the console menu. |
 
 ### Not included yet
 
@@ -215,7 +215,24 @@ CI (`.github/workflows/build.yml`) runs format, clippy and tests, then builds re
 2. **Servers → Add server**. Enter the host and port (8006). For auth, an API token is recommended: create one under *Datacenter → Permissions → API Tokens*. For TLS, keep *Pin certificate* and click **Fetch from server**. Compare the fingerprint with *Node → System → Certificates* or with `pvenode cert info`.
 3. **Test connection** to see diagnostics, then **Save & connect**.
 
-Browser consoles need you to be logged in to the Proxmox web UI in that browser. API tokens can't open consoles.
+In-app consoles need no browser login. VM display (VNC) consoles work with API tokens and with password logins. Terminal consoles (containers, VM serial ports, node shells) need a server profile that logs in with a **password**: Proxmox's `termproxy` checks the `user:ticket` line by logging that user in, and an API token id such as `root@pam!pmxspan` is not a user name it accepts. PMXSpan says so before it tries, and offers the browser console instead. The browser console (*Console → Open in browser*) still needs you to be logged in to the Proxmox web UI in that browser.
+
+## Consoles
+
+**Console** on a guest page (or in the guest list) opens the guest's console in a new PMXSpan window: the VNC display for VMs, the terminal for containers, and the first serial port for a VM without a display (`vga: none` / `serial0`). The arrow next to it offers *Serial console (serialN)* for every serial port the VM has, the VNC display, *Open in browser* (the Proxmox web console) and *SPICE* (virt-viewer). **Shell** on a node page opens a node shell. Several consoles can be open at once, and they keep running while you work in the main window. Closing a console window ends its session; locking PMXSpan or disconnecting closes all of them.
+
+What runs where and what is sent:
+
+1. PMXSpan asks the node to start a console proxy: `POST /nodes/{node}/qemu/{vmid}/vncproxy` with `websocket=1` (VNC), or `POST .../termproxy` for a container, a VM serial port (`serial=serialN`) or a node shell (`/nodes/{node}/termproxy`, `cmd=login`). The reply holds a port and a one-time ticket that must be used within about 10 seconds.
+2. Right away it opens `GET .../vncwebsocket?port=..&vncticket=..` as a WebSocket (`Sec-WebSocket-Protocol: binary`) on its own HTTPS connection: same certificate pinning, same API token header or login cookie as every other API call. Proxmox's `pveproxy` forwards the socket to the proxy on the node that runs the guest.
+3. VNC: the socket carries RFB (the VNC protocol). QEMU asks for VNC authentication with the ticket as password. PMXSpan offers ZRLE, CopyRect and Raw (plus the Cursor and DesktopSize pseudo-encodings), keeps the screen as a texture updated per rectangle, and sends keys as X11 keysyms and the mouse as RFB pointer events (wheel = buttons 4/5). The toolbar has Ctrl+Alt+Del, fit-to-window / 1:1, a clipboard panel (*Type it* types text as key presses and works with any guest; *Send as clipboard* uses RFB cut-text, Latin-1 only, and needs a guest clipboard agent), a full refresh and Reconnect.
+4. Terminal: PMXSpan sends `user:ticket` and waits for `OK`, then sends keystrokes as `0:<bytes>:<data>`, the window size as `1:<cols>:<rows>:` (on connect and on every resize) and a keep-alive `2` every 30 seconds. Output is drawn by a built-in VT100/xterm emulator with 16, 256 and true colours, bold, italic, underline and inverse, scrollback (mouse wheel, Shift+PageUp/PageDown), selection with Ctrl+Shift+C, paste with Ctrl+Shift+V or a right click (multi-line paste asks first), and the bell as a status-line notice.
+
+A VM serial console needs a serial port on the VM (`serial0: socket`, *Hardware → Add → Serial Port*, then a restart) and a guest that runs a login on it (`console=ttyS0` for Linux). VMs created from the OS image catalog already have one. Users need `VM.Console` on the guest, or `Sys.Console` for node shells.
+
+Settings → Preferences → *Consoles* sets the terminal font size, scrollback lines, the default VNC scaling and the multi-line paste confirmation.
+
+Limitations: SPICE is not shown in-app (the *SPICE* item still opens virt-viewer); no audio; the Tight and JPEG encodings are not used (ZRLE is what QEMU sends); RFB clipboards carry Latin-1 only; keyboard input is sent as keysyms, so QEMU's keymap decides the scancodes and keys egui does not report (Print Screen, Pause, the Windows key outside macOS' Cmd) cannot be sent; terminal consoles need a password login (see above).
 
 ## Data locations
 
@@ -268,6 +285,8 @@ Then add a server `127.0.0.1:8006` and log in with:
 - token `root@pam!pmxspan`, secret `mocktoken`, or
 - user `totp@pam`, password `mockpass`, TOTP `123456`.
 
+The mock also serves consoles: VM 100 shows a moving test pattern over VNC (and has a serial port, VM 101 has none), and container or node terminals run a real `bash` on a pseudo-terminal on Linux (an echo shell elsewhere, or with `MOCK_ECHO=1`). Key, pointer and resize events are printed as `MOCK-VNC ...` / `MOCK-TERM ...` lines.
+
 ## Project layout
 
 ```
@@ -277,13 +296,16 @@ src/
                 create, rebuild, OS catalog, IP assignment, placement, guest ops,
                 diagnostics, bandwidth, tenant, pool limits, IPAM drift,
                 config export, schedules
+  console/      in-app consoles: WebSocket transport over the API client (ws.rs),
+                VNC session (vnc.rs) and keysym mapping (keysym.rs), termproxy
+                protocol (term.rs), terminal keys (termkeys.rs) and rendering model (screen.rs)
   automation.rs schedules, due-time logic and usage alerts
   headless.rs   `pmxspan --run-schedules`
   ipam.rs       local IP address management
   vault.rs      encrypted credential storage
   jobs.rs       background jobs with step logs
   rt.rs         UI <-> tokio bridge (Fetch handles)
-  ui/           egui views
+  ui/           egui views (ui/console/: the console windows)
 assets/fonts/   bundled fonts and their licenses
 packaging/      app icon (make_icon.py), Debian package, Windows installer
 screenshots/    the images in this README
@@ -291,7 +313,7 @@ tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
-Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations.
+Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing, moving data to new folder locations, and the consoles: termproxy framing, the WebSocket adapter, keysym and terminal key mapping, the terminal rendering model and the proxy request builders. End-to-end console tests start `tools/mock_pve.py` (skipped when `python3` or `openssl` is missing) and drive a VNC session (with an API token) and a terminal session through the real client.
 
 ## Credits
 
