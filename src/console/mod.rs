@@ -20,6 +20,9 @@ pub mod termkeys;
 pub mod vnc;
 pub mod ws;
 
+#[cfg(test)]
+mod e2e_tests;
+
 use crate::api::types::{GuestKind, GuestRef};
 use crate::api::{Params, PveClient};
 use crate::util::ValueExt;
