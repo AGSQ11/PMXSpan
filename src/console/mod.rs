@@ -13,6 +13,8 @@
 //!
 //! The protocol code lives here; the windows are in `ui::console`.
 
+pub mod keysym;
+pub mod vnc;
 pub mod ws;
 
 use crate::api::types::{GuestKind, GuestRef};
