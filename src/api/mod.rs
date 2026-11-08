@@ -283,6 +283,14 @@ impl PveClient {
         matches!(self.inner.creds, Credentials::Token { .. })
     }
 
+    /// An authenticated GET for a request the caller sends itself (the
+    /// console WebSocket upgrade): same HTTP client, TLS policy and auth
+    /// header/cookie as every other call.
+    pub async fn authorized_get(&self, path: &str) -> anyhow::Result<reqwest::RequestBuilder> {
+        self.ensure_ticket().await?;
+        Ok(self.authorize(self.inner.http.get(self.url(path)), false))
+    }
+
     fn url(&self, path: &str) -> String {
         let path = path.trim_start_matches('/');
         format!("{}/{}", self.inner.base, path)

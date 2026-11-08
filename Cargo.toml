@@ -41,6 +41,13 @@ urlencoding = "2.1.3"
 webbrowser = "1.2.5"
 ssh-key = { version = "0.6.7", default-features = false, features = ["std", "ed25519", "rand_core", "encryption"] }
 zeroize = "1.8"
+# In-app consoles (VNC viewer and terminal over Proxmox's vncwebsocket).
+# The WebSocket runs on the connection reqwest already upgraded, so no TLS
+# features (and no second TLS stack) are needed here.
+tokio-tungstenite = { version = "0.30", default-features = false }
+vnc-rs = "0.6"
+vt100 = "0.18"
+sha1 = "0.10"
 
 [profile.release]
 opt-level = 3
