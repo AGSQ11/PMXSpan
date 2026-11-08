@@ -14,6 +14,9 @@
 //! The protocol code lives here; the windows are in `ui::console`.
 
 pub mod keysym;
+pub mod screen;
+pub mod term;
+pub mod termkeys;
 pub mod vnc;
 pub mod ws;
 
