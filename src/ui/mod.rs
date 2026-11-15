@@ -477,13 +477,25 @@ impl App {
         if ctx.input(|i| !i.events.is_empty()) | console::take_activity() {
             self.last_activity = Instant::now();
         }
+        self.enforce_idle_lock(ctx);
+    }
+
+    /// The idle deadline itself, also run from `App::logic`: eframe does not
+    /// call `App::ui` while the window is minimized or hidden, and the vault,
+    /// the connections and the MCP server must lock then too. Schedules its own
+    /// wake-up for the moment the deadline passes.
+    fn enforce_idle_lock(&mut self, ctx: &egui::Context) {
         let mins = self.config.settings.auto_lock_mins;
-        if mins > 0
-            && self.vault_protected()
-            && self.last_activity.elapsed() >= Duration::from_secs(mins * 60)
-            && self.jobs.running_count() == 0
-        {
+        if mins == 0 || !self.vault_protected() {
+            return;
+        }
+        let limit = Duration::from_secs(mins * 60);
+        let idle = self.last_activity.elapsed();
+        if idle_lock_due(limit, idle, self.jobs.running_count()) {
             self.lock();
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(limit.saturating_sub(idle).max(Duration::from_secs(1)));
         }
     }
 
@@ -1228,6 +1240,12 @@ impl App {
     }
 }
 
+/// Whether the idle time has passed. Running jobs hold their own connection,
+/// so the lock waits for them.
+fn idle_lock_due(limit: Duration, idle: Duration, running_jobs: usize) -> bool {
+    idle >= limit && running_jobs == 0
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1284,10 +1302,26 @@ impl eframe::App for App {
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.integration_logic(ctx);
+        if self.vault_ready() {
+            self.enforce_idle_lock(ctx);
+        }
     }
 
     fn on_exit(&mut self) {
         self.mcp.shutdown();
         let _ = self.config.save(&self.paths.config_file());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_lock_deadline() {
+        let limit = Duration::from_secs(300);
+        assert!(!idle_lock_due(limit, Duration::from_secs(299), 0));
+        assert!(idle_lock_due(limit, Duration::from_secs(300), 0));
+        assert!(!idle_lock_due(limit, Duration::from_secs(900), 1), "waits for running jobs");
     }
 }
