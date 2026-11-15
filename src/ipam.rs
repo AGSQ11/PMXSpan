@@ -227,13 +227,11 @@ impl IpamDb {
                 a.main = false;
             }
         }
-        let n = self.assignments.len();
-        for i in 0..n {
-            let a = &self.assignments[i];
+        for a in self.assignments.iter_mut() {
             let Some(vmid) = a.vmid else { continue };
             let key = (a.server_id.clone(), Some(vmid), a.iface(), a.is_v6());
             if !seen_main.contains(&key) {
-                self.assignments[i].main = true;
+                a.main = true;
                 seen_main.insert(key);
             }
         }
