@@ -269,6 +269,10 @@ async fn generic_client_against_mock_cluster() {
     assert!(tasks.contains(&upid) && tasks.contains("Start"), "{tasks}");
     assert!(c.ok("snapshot_create", json!({"vmid": 100, "name": "mcp_test", "description": "from MCP"})).await.contains("done"));
     assert!(c.ok("list_snapshots", json!({"vmid": 100})).await.contains("mcp_test"));
+    // The `auto-` names belong to scheduled snapshots (retention deletes by that prefix).
+    let (t, err) = c.tool("snapshot_create", json!({"vmid": 100, "name": "auto-abc123-20260101-000000"})).await;
+    assert!(err && t.starts_with("Invalid arguments") && t.contains("reserved"), "{t}");
+    assert!(!c.ok("list_snapshots", json!({"vmid": 100})).await.contains("auto-abc123"));
     let out = c.ok("agent_exec", json!({"vmid": 100, "argv": ["uname", "-a"]})).await;
     assert!(out.contains("exited with code 0") && out.contains("hello from the mock guest agent"), "{out}");
     let (t, err) = c.tool("agent_exec", json!({"vmid": 102, "argv": ["id"]})).await;
@@ -284,7 +288,7 @@ async fn generic_client_against_mock_cluster() {
 
     let audit = std::fs::read_to_string(dir.join(super::AUDIT_FILE)).unwrap();
     let outcomes: Vec<&str> = audit.lines().map(|l| l.rsplit("outcome=").next().unwrap()).collect();
-    assert_eq!(outcomes, ["refused", "ok", "ok", "ok", "error", "error", "ok", "error", "refused"], "{audit}");
+    assert_eq!(outcomes, ["refused", "ok", "ok", "error", "ok", "error", "error", "ok", "error", "refused"], "{audit}");
 
     let resp = c
         .http

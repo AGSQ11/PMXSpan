@@ -1350,10 +1350,22 @@ async fn power(ctx: &Ctx, args: &Value) -> R {
     task_outcome(&ctx.client, &format!("{action} {} {vmid} '{}' on {}", g.kind.label(), or_dash(&r.name), ctx.label), upid).await
 }
 
+/// Scheduled snapshots own the `auto-` namespace: retention deletes by that
+/// prefix, so a snapshot an MCP client creates there could make PMXSpan delete
+/// real automatic snapshots. An MCP client never causes a deletion.
+fn reserved_snapshot_name(name: &str) -> bool {
+    name.get(..5).is_some_and(|p| p.eq_ignore_ascii_case("auto-"))
+}
+
 async fn snapshot_create(ctx: &Ctx, args: &Value) -> R {
     let vmid = need_vmid(args)?;
     let name = arg_str(args, "name").ok_or("Invalid arguments: 'name' is required.")?;
     crate::ops::guest::validate_snapshot_name(&name).map_err(|e| format!("Invalid arguments: {e}."))?;
+    if reserved_snapshot_name(&name) {
+        return Err(
+            "Invalid arguments: names starting with 'auto-' are reserved for PMXSpan's scheduled snapshots; pick another name.".into()
+        );
+    }
     let description = args.get("description").and_then(Value::as_str).unwrap_or("").to_string();
     let vmstate = arg_bool(args, "vmstate")?;
     let res = resources(ctx).await?;
@@ -1485,6 +1497,16 @@ mod tests {
         let c = log_clip(&huge, 1024);
         assert!(c.chars().count() <= 1025 && !c.contains(['\n', '\u{1b}']));
         assert_eq!(log_clip("web01", 64), "web01");
+    }
+
+    #[test]
+    fn auto_snapshot_namespace_is_reserved_for_schedules() {
+        for n in ["auto-abc123-20260101-000000", "AUTO-x", "Auto-"] {
+            assert!(reserved_snapshot_name(n), "{n}");
+        }
+        for n in ["before_upgrade", "auto", "automatic-1", "my-auto-1", "é"] {
+            assert!(!reserved_snapshot_name(n), "{n}");
+        }
     }
 
     #[test]
