@@ -344,6 +344,16 @@ fn cap(mut s: String) -> String {
     s
 }
 
+/// Client-controlled text for the application log: one line, no control
+/// characters, at most `max` characters.
+fn log_clip(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).map(|c| if c.is_control() { ' ' } else { c }).collect();
+    if s.chars().nth(max).is_some() {
+        out.push('…');
+    }
+    out
+}
+
 /// Runs a tool. A protocol error only for an unknown tool; everything else
 /// (bad arguments, Proxmox errors, refusals) is a tool result with
 /// `isError: true` so the model can read and act on it.
@@ -358,27 +368,27 @@ pub async fn call(view: &AppView, session: &str, name: &str, args: &Value) -> Re
     let short = session.get(..8).unwrap_or(session);
     if ACTION_TOOLS.contains(&name) {
         if !view.allow_actions() {
-            tracing::info!("MCP action {name} refused (actions are off), session {short}, arguments {args}");
+            tracing::info!("MCP action {name} refused (actions are off), session {short}, arguments {}", log_clip(&args.to_string(), 1024));
             view.audit.record(session, name, args, Outcome::Refused);
             return Ok(ToolOutput::err(actions_off_text(name)));
         }
-        tracing::info!("MCP action {name} requested, session {short}, arguments {args}");
+        tracing::info!("MCP action {name} requested, session {short}, arguments {}", log_clip(&args.to_string(), 1024));
         let r = run_action(view, name, args).await;
         let outcome = if r.is_ok() { Outcome::Ok } else { Outcome::Error };
         view.audit.record(session, name, args, outcome);
         return Ok(match r {
             Ok(t) => {
-                tracing::info!("MCP action {name} done: {}", t.lines().next().unwrap_or(""));
+                tracing::info!("MCP action {name} done: {}", log_clip(t.lines().next().unwrap_or(""), 300));
                 ToolOutput::ok(t)
             }
             Err(e) => {
-                tracing::warn!("MCP action {name} failed: {}", e.lines().next().unwrap_or(""));
+                tracing::warn!("MCP action {name} failed: {}", log_clip(e.lines().next().unwrap_or(""), 300));
                 ToolOutput::err(e)
             }
         });
     }
     if is_destructive_name(name) {
-        tracing::warn!("MCP call to destructive operation '{name}' refused, session {short}");
+        tracing::warn!("MCP call to destructive operation '{}' refused, session {short}", log_clip(name, 64));
         view.audit.record(session, name, args, Outcome::Refused);
         return Ok(ToolOutput::err(refusal_text(name)));
     }
@@ -1460,6 +1470,14 @@ mod tests {
     use super::*;
 
     const GOLDEN: &str = include_str!("../../tests/mcp_tools.golden.json");
+
+    #[test]
+    fn client_text_is_clipped_for_the_log() {
+        let huge = "x\n\u{1b}[2J".repeat(1 << 18);
+        let c = log_clip(&huge, 1024);
+        assert!(c.chars().count() <= 1025 && !c.contains(['\n', '\u{1b}']));
+        assert_eq!(log_clip("web01", 64), "web01");
+    }
 
     #[test]
     fn node_names_are_single_safe_segments() {
