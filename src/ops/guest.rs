@@ -510,13 +510,15 @@ pub async fn convert_to_template(client: &PveClient, ctx: &JobCtx, g: &GuestRef)
     Ok(format!("{} is now a template", g.vmid))
 }
 
-/// Stops (if needed) and destroys a guest, then releases its IPAM addresses.
+/// Stops (if needed) and destroys a guest, then releases its IPAM addresses
+/// and revokes its schedules.
 pub async fn destroy(
     client: &PveClient,
     ctx: &JobCtx,
     g: &GuestRef,
     purge: bool,
     ipam: Option<(&parking_lot::Mutex<crate::ipam::IpamDb>, &str)>,
+    automation: Option<(&parking_lot::Mutex<crate::automation::AutomationStore>, &str)>,
 ) -> anyhow::Result<String> {
     let st = status(client, g).await?;
     if st.s("status") == "running" || st.s("status") == "paused" {
@@ -532,6 +534,15 @@ pub async fn destroy(
             ctx.info(format!("released IPAM addresses: {}", released.join(", ")));
         }
         crate::hostkeys::forget(server_id, g.vmid);
+    }
+    // Its schedules must not outlive it: the VMID may be handed to another guest.
+    if let Some((store, server_id)) = automation {
+        let mut st = store.lock();
+        let n = st.forget_guest(server_id, g.vmid);
+        if n > 0 {
+            st.save()?;
+            ctx.info(format!("removed {n} schedule(s) of the destroyed guest"));
+        }
     }
     Ok(format!("{} {} destroyed", g.kind.label(), g.vmid))
 }

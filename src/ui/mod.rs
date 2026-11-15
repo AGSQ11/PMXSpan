@@ -121,6 +121,7 @@ pub struct Shared {
     pub jobs: Jobs,
     pub settings: Settings,
     pub ipam: Arc<Mutex<IpamDb>>,
+    pub automation: Arc<Mutex<crate::automation::AutomationStore>>,
     pub catalog: Arc<Mutex<CatalogStore>>,
     pub resources: Arc<Vec<Resource>>,
 }
@@ -543,6 +544,7 @@ impl App {
                     jobs: self.jobs.clone(),
                     settings: self.config.settings.clone(),
                     ipam: self.ipam.clone(),
+                    automation: self.automation.clone(),
                     catalog: self.catalog.clone(),
                     resources: Arc::new(Vec::new()),
                 };
