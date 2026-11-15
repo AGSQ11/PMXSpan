@@ -6,14 +6,18 @@ mod automation_view;
 mod catalog_view;
 mod charts;
 mod cluster;
+pub mod console;
 mod create;
 mod dashboard;
 mod guest;
 mod guests;
 pub mod icon;
+mod integration;
 mod ipam_view;
 mod jobs_panel;
+mod mcp_settings;
 mod node;
+mod pubkeys;
 mod servers;
 mod settings;
 mod storage;
@@ -83,6 +87,8 @@ pub enum Action {
     /// Set (or clear, when unlimited) a tenant pool's limits on the connected server.
     SetPoolLimits(String, crate::config::PoolLimits),
     ConfigChanged,
+    /// SSHSpan: connect to a guest or node, or the bulk handoff.
+    Integration(integration::Request),
 }
 
 #[derive(Default)]
@@ -115,6 +121,7 @@ pub struct Shared {
     pub jobs: Jobs,
     pub settings: Settings,
     pub ipam: Arc<Mutex<IpamDb>>,
+    pub automation: Arc<Mutex<crate::automation::AutomationStore>>,
     pub catalog: Arc<Mutex<CatalogStore>>,
     pub resources: Arc<Vec<Resource>>,
 }
@@ -310,17 +317,33 @@ pub struct App {
     alerts_fed: usize,
     last_schedule_check: Option<Instant>,
     schedules_running: Arc<Mutex<HashSet<String>>>,
+    integration: integration::IntegrationUi,
+    /// The optional local MCP server (off unless enabled in the settings).
+    mcp: crate::mcp::McpHost,
 }
 
 impl App {
     pub fn new(paths: AppPaths) -> Self {
         let paths_automation = paths.automation_file();
+        crate::hostkeys::init(&paths.hostkeys_file());
+        let mcp = crate::mcp::McpHost::new(&paths);
         let config = AppConfig::load(&paths.config_file());
         let ipam = Arc::new(Mutex::new(IpamDb::load(&paths.ipam_file())));
         let catalog = Arc::new(Mutex::new(CatalogStore::load(&paths.catalog_file())));
-        let vault = if Vault::exists(&paths.vault_file()) { Vault::open(&paths.vault_file()).ok() } else { None };
+        let vault_exists = Vault::exists(&paths.vault_file());
+        let (vault, vault_error) = if vault_exists {
+            match Vault::open(&paths.vault_file()) {
+                Ok(v) => (Some(v), None),
+                Err(e) => {
+                    tracing::error!("vault {} cannot be opened: {e:#}", paths.vault_file().display());
+                    (None, Some(format!("{e:#}")))
+                }
+            }
+        } else {
+            (None, None)
+        };
         let mut app = Self {
-            unlock: unlock::UnlockView::new(vault.as_ref()),
+            unlock: unlock::UnlockView::new(vault_exists, vault_error),
             paths,
             config,
             vault,
@@ -350,6 +373,8 @@ impl App {
             alerts_fed: 0,
             last_schedule_check: None,
             schedules_running: Default::default(),
+            integration: Default::default(),
+            mcp,
         };
         // An unprotected vault opens without prompting.
         if let Some(v) = app.vault.as_mut()
@@ -444,6 +469,15 @@ impl App {
         }
     }
 
+    /// Starts / stops the MCP server to match the settings and feeds it the
+    /// current connection. Nothing happens while it is disabled.
+    fn tick_mcp(&mut self) {
+        let connected = self.session.as_ref().map(|s| (&s.shared.client, &s.shared.profile));
+        if let Some(err) = self.mcp.tick(&self.config.settings, &self.config.profiles, self.vault.as_mut(), connected, &self.ipam) {
+            self.toast(ToastLevel::Error, err);
+        }
+    }
+
     fn vault_protected(&self) -> bool {
         self.vault.as_ref().is_some_and(Vault::is_protected)
     }
@@ -451,16 +485,28 @@ impl App {
     /// Locks a protected vault after the configured idle time. Waits for
     /// running jobs, which still hold their own connection.
     fn auto_lock(&mut self, ctx: &egui::Context) {
-        if ctx.input(|i| !i.events.is_empty()) {
+        if ctx.input(|i| !i.events.is_empty()) | console::take_activity() {
             self.last_activity = Instant::now();
         }
+        self.enforce_idle_lock(ctx);
+    }
+
+    /// The idle deadline itself, also run from `App::logic`: eframe does not
+    /// call `App::ui` while the window is minimized or hidden, and the vault,
+    /// the connections and the MCP server must lock then too. Schedules its own
+    /// wake-up for the moment the deadline passes.
+    fn enforce_idle_lock(&mut self, ctx: &egui::Context) {
         let mins = self.config.settings.auto_lock_mins;
-        if mins > 0
-            && self.vault_protected()
-            && self.last_activity.elapsed() >= Duration::from_secs(mins * 60)
-            && self.jobs.running_count() == 0
-        {
+        if mins == 0 || !self.vault_protected() {
+            return;
+        }
+        let limit = Duration::from_secs(mins * 60);
+        let idle = self.last_activity.elapsed();
+        if idle_lock_due(limit, idle, self.jobs.running_count()) {
             self.lock();
+            ctx.request_repaint();
+        } else {
+            ctx.request_repaint_after(limit.saturating_sub(idle).max(Duration::from_secs(1)));
         }
     }
 
@@ -470,11 +516,13 @@ impl App {
         if let Some(v) = self.vault.as_mut() {
             v.lock();
         }
+        self.mcp.on_lock();
+        console::close_all();
         self.session = None;
         self.connecting = None;
         self.totp = None;
         self.servers = Default::default();
-        self.unlock = unlock::UnlockView::new(self.vault.as_ref());
+        self.unlock = unlock::UnlockView::new(self.vault.is_some(), None);
         self.last_activity = Instant::now();
         tracing::info!("vault locked");
     }
@@ -519,6 +567,7 @@ impl App {
                     jobs: self.jobs.clone(),
                     settings: self.config.settings.clone(),
                     ipam: self.ipam.clone(),
+                    automation: self.automation.clone(),
                     catalog: self.catalog.clone(),
                     resources: Arc::new(Vec::new()),
                 };
@@ -594,6 +643,7 @@ impl App {
                 }
                 Action::Connect(id) => self.connect(&id, None),
                 Action::Disconnect => {
+                    console::close_all();
                     self.session = None;
                     self.nav = Nav::Servers;
                 }
@@ -645,6 +695,7 @@ impl App {
                         s.shared.profile = p.clone();
                     }
                 }
+                Action::Integration(r) => self.integration_request(r),
                 Action::ConfigChanged => {
                     self.save_config();
                     if let Some(s) = self.session.as_mut() {
@@ -1200,6 +1251,12 @@ impl App {
     }
 }
 
+/// Whether the idle time has passed. Running jobs hold their own connection,
+/// so the lock waits for them.
+fn idle_lock_due(limit: Duration, idle: Duration, running_jobs: usize) -> bool {
+    idle >= limit && running_jobs == 0
+}
+
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
@@ -1230,6 +1287,7 @@ impl eframe::App for App {
         }
         self.run_due_schedules();
         self.feed_alerts();
+        self.tick_mcp();
         ctx.request_repaint_after(every);
 
         let mut actions = Actions::default();
@@ -1247,11 +1305,34 @@ impl eframe::App for App {
             self.central(ui, &mut actions);
         });
         self.totp_window(&ctx);
+        self.integration_windows(&ctx, &mut actions);
+        console::show_windows(&ctx, &self.config.settings);
         self.toasts_ui(&ctx);
         self.process(actions);
     }
 
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.integration_logic(ctx);
+        if self.vault_ready() {
+            self.enforce_idle_lock(ctx);
+        }
+    }
+
     fn on_exit(&mut self) {
+        self.mcp.shutdown();
         let _ = self.config.save(&self.paths.config_file());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn idle_lock_deadline() {
+        let limit = Duration::from_secs(300);
+        assert!(!idle_lock_due(limit, Duration::from_secs(299), 0));
+        assert!(idle_lock_due(limit, Duration::from_secs(300), 0));
+        assert!(!idle_lock_due(limit, Duration::from_secs(900), 1), "waits for running jobs");
     }
 }

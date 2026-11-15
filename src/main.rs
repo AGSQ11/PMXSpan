@@ -8,12 +8,18 @@
 mod api;
 mod automation;
 mod config;
+mod console;
 mod headless;
+mod hostkeys;
+mod integrations;
 mod ipam;
 mod jobs;
 mod logging;
+mod mcp;
 mod ops;
+mod pubkeys;
 mod rt;
+mod sshkey;
 mod ui;
 mod util;
 mod vault;
@@ -29,6 +35,12 @@ fn main() -> eframe::Result {
 
     if headless::wants_headless() {
         std::process::exit(headless::run_schedules(&paths));
+    }
+
+    // Single instance: a second start hands its pmxspan:// link to the
+    // running window and exits.
+    if let integrations::ipc::Instance::Forwarded = integrations::ipc::start(&paths, integrations::ipc::link_args()) {
+        return Ok(());
     }
 
     let options = eframe::NativeOptions {

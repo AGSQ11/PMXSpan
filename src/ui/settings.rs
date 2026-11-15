@@ -11,6 +11,8 @@ pub struct SettingsView {
     new_master2: String,
     log_filter: String,
     tab: u8,
+    pubkeys: super::pubkeys::Picker,
+    mcp: super::mcp_settings::McpPanel,
 }
 
 impl SettingsView {
@@ -19,11 +21,13 @@ impl SettingsView {
             ui.selectable_value(&mut self.tab, 0, "Preferences");
             ui.selectable_value(&mut self.tab, 1, "Security");
             ui.selectable_value(&mut self.tab, 2, "Application log");
+            ui.selectable_value(&mut self.tab, 3, "MCP server");
         });
         ui.separator();
         match self.tab {
             0 => self.prefs(ui, config, actions),
             1 => self.security(ui, vault, paths, actions),
+            3 => self.mcp.ui(ui, config, vault, paths, actions),
             _ => self.logs(ui, paths),
         }
     }
@@ -107,6 +111,9 @@ impl SettingsView {
                         .font(egui::TextStyle::Monospace),
                 );
                 ui.end_row();
+                ui.label("");
+                self.pubkeys.button(ui);
+                ui.end_row();
                 ui.label("Task watch timeout");
                 ui.add(egui::DragValue::new(&mut s.task_timeout_secs).range(60..=86400).suffix(" s"));
                 ui.end_row();
@@ -140,7 +147,12 @@ impl SettingsView {
                 });
                 ui.end_row();
             });
+            super::integration::settings_section(ui, s);
+            super::console::settings_section(ui, s);
         });
+        if let Some(m) = self.pubkeys.show(ui.ctx(), "settings", &mut s.default_ssh_keys) {
+            actions.toast_ok(m);
+        }
         if serde_json::to_string(s).unwrap_or_default() != before {
             actions.0.push(Action::ConfigChanged);
         }
@@ -176,6 +188,7 @@ impl SettingsView {
             widgets::kv(ui, "Config", paths.config_file().display().to_string());
             widgets::kv(ui, "Vault", paths.vault_file().display().to_string());
             widgets::kv(ui, "IPAM database", paths.ipam_file().display().to_string());
+            widgets::kv(ui, "SSH host keys", paths.hostkeys_file().display().to_string());
             widgets::kv(ui, "Logs", paths.log_dir.display().to_string());
         });
         widgets::muted(ui, "Tip: create an empty file named 'portable' next to the executable to keep all data beside it.");

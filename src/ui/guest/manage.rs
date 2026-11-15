@@ -60,9 +60,9 @@ impl ManageTab {
             let gr = g.clone();
             match a {
                 Act::Destroy(purge) => {
-                    let (ipam, sid) = (sh.ipam.clone(), sh.server_id.clone());
+                    let (ipam, automation, sid) = (sh.ipam.clone(), sh.automation.clone(), sh.server_id.clone());
                     sh.spawn(gc.title("Destroy"), move |ctx| async move {
-                        guest::destroy(&c, &ctx, &gr, purge, Some((&*ipam, sid.as_str()))).await
+                        guest::destroy(&c, &ctx, &gr, purge, Some((&*ipam, sid.as_str())), Some((&*automation, sid.as_str()))).await
                     });
                 }
                 Act::Template => {

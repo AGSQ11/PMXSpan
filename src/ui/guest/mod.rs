@@ -5,6 +5,7 @@ mod backups;
 pub mod cloudinit;
 mod firewall;
 mod hardware;
+mod hostkeys_card;
 mod ips;
 mod manage;
 mod network;
@@ -136,7 +137,7 @@ impl GuestView {
             spawn_power(sh, &g, &res, a);
         }
 
-        self.header(ui, sh, &g, &res);
+        self.header(ui, sh, &g, &res, actions);
         let mut tabs = vec![(Tab::Summary, "Summary"), (Tab::Hardware, "Hardware"), (Tab::Network, "Network"), (Tab::Ips, "IP addresses")];
         if self.kind == GuestKind::Qemu {
             tabs.push((Tab::CloudInit, "Cloud-Init"));
@@ -170,7 +171,16 @@ impl GuestView {
         });
     }
 
-    fn header(&mut self, ui: &mut egui::Ui, sh: &Shared, g: &GuestRef, res: &Resource) {
+    /// Whether the Cloud-Init tab is showing (a key from SSHSpan can go there).
+    pub fn cloudinit_open(&self) -> bool {
+        self.tab == Tab::CloudInit
+    }
+
+    pub fn add_cloudinit_key(&mut self, key: &crate::sshkey::PublicKey) -> bool {
+        self.cloudinit.add_ssh_key(key)
+    }
+
+    fn header(&mut self, ui: &mut egui::Ui, sh: &Shared, g: &GuestRef, res: &Resource, actions: &mut Actions) {
         let p = theme::p();
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(42.0, 42.0), egui::Sense::hover());
@@ -263,20 +273,16 @@ impl GuestView {
                         self.power(sh, g, res, a);
                     }
                 }
-                if g.kind == GuestKind::Qemu
-                    && running
-                    && widgets::icon_button(ui, theme::icon::DESKTOP, "SPICE")
-                        .on_hover_text("Requires a SPICE display and virt-viewer")
-                        .clicked()
-                {
-                    let (c, gr) = (sh.client.clone(), g.clone());
-                    sh.spawn(format!("SPICE console {}", g.vmid), move |_ctx| async move { guest::open_spice(&c, &gr).await });
-                }
-                if widgets::icon_button(ui, theme::icon::TERMINAL, "Console")
-                    .on_hover_text("Opens the Proxmox console in your browser (log in to the web UI there if asked)")
-                    .clicked()
-                {
-                    let _ = webbrowser::open(&guest::console_url(&sh.client, g, &res.name));
+                // In-app console first; browser console and SPICE in its menu.
+                super::console::guest_console_buttons(ui, sh, g, res, self.config.ok());
+                if crate::ui::integration::sshspan_button(
+                    ui,
+                    &sh.settings,
+                    "Connect with SSHSpan",
+                    "Open an SSH session to this guest in SSHSpan (you confirm the address, user and port first)",
+                    crate::ui::integration::ButtonStyle::Primary,
+                ) {
+                    actions.0.push(crate::ui::Action::Integration(crate::ui::integration::Request::ConnectGuest(g.kind, g.vmid)));
                 }
             });
         });

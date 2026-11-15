@@ -31,6 +31,7 @@ pub struct IpamView {
     filter: String,
     confirm_delete: Option<Confirm<String>>,
     confirm_release: Option<Confirm<String>>,
+    confirm_orphan: Option<Confirm<u64>>,
 }
 
 impl IpamView {
@@ -125,6 +126,14 @@ impl IpamView {
             "Compares IPAM with the connected cluster: addresses kept for guests that are gone, static addresses guests use that IPAM \
              doesn't know, main addresses that differ, and guests created by PMXSpan that have no IPAM record.",
         );
+        if let Some(vmid) = widgets::confirm_ui(ui.ctx(), &mut self.confirm_orphan) {
+            let (c, ipam, sid) = (sh.client.clone(), sh.ipam.clone(), sh.server_id.clone());
+            sh.spawn(
+                format!("Release IPAM addresses of {vmid}"),
+                move |_ctx| async move { drift::release_orphan(&c, &ipam, &sid, vmid).await },
+            );
+            actions.toast("Started - scan again once the job has finished");
+        }
         let stale = self.drift_server != sh.server_id;
         ui.horizontal(|ui| {
             let busy = self.drift.is_loading();
@@ -164,7 +173,7 @@ impl IpamView {
                 }
                 ui.end_row();
                 for it in items {
-                    drift_row(ui, sh, db, &it, actions, &mut rescan);
+                    drift_row(ui, sh, &it, actions, &mut rescan, &mut self.confirm_orphan);
                     ui.end_row();
                 }
             });
@@ -328,7 +337,14 @@ impl IpamView {
     }
 }
 
-fn drift_row(ui: &mut egui::Ui, sh: &Shared, db: &Arc<Mutex<IpamDb>>, it: &DriftItem, actions: &mut Actions, rescan: &mut bool) {
+fn drift_row(
+    ui: &mut egui::Ui,
+    sh: &Shared,
+    it: &DriftItem,
+    actions: &mut Actions,
+    rescan: &mut bool,
+    confirm_orphan: &mut Option<Confirm<u64>>,
+) {
     match &it.guest {
         Some(g) => {
             if ui.link(it.vmid.to_string()).clicked() {
@@ -348,10 +364,14 @@ fn drift_row(ui: &mut egui::Ui, sh: &Shared, db: &Arc<Mutex<IpamDb>>, it: &Drift
         DriftKind::Orphan => {
             ui.label("IPAM still holds it for a VMID that no longer exists");
             if ui.small_button("Release").clicked() {
-                match db.lock().release_guest_note(&sh.server_id, it.vmid, "guest gone (drift)") {
-                    Ok(ips) => actions.toast_ok(format!("Released {}", ips.join(", "))),
-                    Err(e) => actions.toast_err(format!("{e:#}")),
-                }
+                *confirm_orphan = Some(Confirm::new(
+                    "Release addresses",
+                    format!(
+                        "Release the IPAM addresses of VMID {}? PMXSpan checks with the cluster first and refuses if the guest still exists.",
+                        it.vmid
+                    ),
+                    it.vmid,
+                ));
             }
         }
         DriftKind::Untracked => {

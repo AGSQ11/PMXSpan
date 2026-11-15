@@ -349,16 +349,23 @@ pub struct CatalogStore {
     pub cicustom: BTreeMap<String, String>,
     #[serde(skip)]
     path: PathBuf,
+    /// The file existed but was unreadable and could not be set aside: never save over it.
+    #[serde(skip)]
+    locked: bool,
 }
 
 impl CatalogStore {
     pub fn load(path: &Path) -> Self {
-        let mut s: CatalogStore = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let (mut s, preserved): (CatalogStore, bool) = crate::config::load_state(path);
         s.path = path.to_path_buf();
+        s.locked = !preserved;
         s
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
+        if self.locked {
+            bail!("{} could not be read and could not be preserved; not overwriting it", self.path.display());
+        }
         write_atomic(&self.path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 
@@ -412,15 +419,21 @@ impl CatalogStore {
     }
 
     /// Merges an imported catalog; entries with the same id are replaced.
+    /// Imported entries are untrusted: a local-only cicustom binding made for
+    /// an entry never carries over to different content under the same id.
     pub fn import(&mut self, entries: Vec<CatalogEntry>) -> anyhow::Result<(usize, usize)> {
         let (mut added, mut replaced) = (0, 0);
         for e in entries {
             match self.entries.iter_mut().find(|x| x.id == e.id) {
                 Some(slot) => {
+                    if *slot != e {
+                        self.cicustom.remove(&e.id);
+                    }
                     *slot = e;
                     replaced += 1;
                 }
                 None => {
+                    self.cicustom.remove(&e.id);
                     self.entries.push(e);
                     added += 1;
                 }
@@ -762,6 +775,45 @@ pub async fn download(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn temp_store() -> CatalogStore {
+        let dir = std::env::temp_dir().join(format!("pmxspan-catalog-{}", crate::config::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        CatalogStore::load(&dir.join("catalog.json"))
+    }
+
+    #[test]
+    fn import_drops_local_cicustom_binding_of_a_replaced_entry() {
+        let mut st = temp_store();
+        let entry =
+            CatalogEntry { id: "debian-12".into(), virt: "qemu".into(), url: "https://good.example/d.qcow2".into(), ..Default::default() };
+        st.entries.push(entry.clone());
+        st.set_cicustom(None, "debian-12", "user=local:snippets/u.yml").unwrap();
+        // An identical re-import keeps the operator's binding.
+        assert_eq!(st.import(vec![entry.clone()]).unwrap(), (0, 1));
+        assert!(st.cicustom.contains_key("debian-12"));
+        // Different content under the same id does not inherit it.
+        let evil = CatalogEntry { url: "https://evil.example/d.qcow2".into(), ..entry };
+        assert_eq!(st.import(vec![evil]).unwrap(), (0, 1));
+        assert!(!st.cicustom.contains_key("debian-12"));
+        assert!(!CatalogStore::load(&st.path).cicustom.contains_key("debian-12"), "also after reload");
+    }
+
+    #[test]
+    fn unreadable_catalog_is_kept_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("pmxspan-catalog-bad-{}", crate::config::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("catalog.json");
+        std::fs::write(&path, "{ not json").unwrap();
+        let mut st = CatalogStore::load(&path);
+        assert!(st.entries.is_empty());
+        let kept = std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("unreadable")).count();
+        assert_eq!(kept, 1);
+        assert!(st.save().is_ok(), "a preserved file lets the new store save");
+        st.locked = true;
+        assert!(st.save().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn module_catalog_compat() {

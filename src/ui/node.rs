@@ -101,8 +101,21 @@ impl NodeView {
                 {
                     actions.0.push(super::Action::SetMaintenance(node.clone(), !maint));
                 }
+                if ui.button(format!("{}  Shell", theme::icon::TERMINAL)).on_hover_text("Opens a node shell in a PMXSpan window").clicked()
+                {
+                    super::console::open_target(sh, crate::console::ConsoleTarget::NodeShell(node.clone()), &node);
+                }
                 if ui.button("Shell (browser)").clicked() {
                     let _ = webbrowser::open(&crate::ops::guest::node_shell_url(&sh.client, &node));
+                }
+                if super::integration::sshspan_button(
+                    ui,
+                    &sh.settings,
+                    "SSH with SSHSpan",
+                    "Open an SSH session to this node as root in SSHSpan (you confirm the address first)",
+                    super::integration::ButtonStyle::Normal,
+                ) {
+                    actions.0.push(super::Action::Integration(super::integration::Request::ConnectNode(node.clone())));
                 }
                 if ui.button("Start all guests").clicked() {
                     self.confirm =

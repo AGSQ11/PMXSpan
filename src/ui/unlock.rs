@@ -16,8 +16,11 @@ pub struct UnlockView {
 }
 
 impl UnlockView {
-    pub fn new(existing: Option<&Vault>) -> Self {
-        Self { exists: existing.is_some(), ..Default::default() }
+    /// `exists`: a vault file is on disk, whether or not it could be opened.
+    /// A file that cannot be opened is the unlock case (with its error shown),
+    /// never first-run setup, which would overwrite it.
+    pub fn new(exists: bool, open_error: Option<String>) -> Self {
+        Self { exists, error: open_error, ..Default::default() }
     }
 
     /// Creates or unlocks `vault` in place. Returns true once it is unlocked.
@@ -108,5 +111,18 @@ impl UnlockView {
             });
         });
         done
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unopenable_vault_is_the_unlock_screen_with_its_error() {
+        let v = UnlockView::new(true, Some("the vault was written by a newer PMXSpan".into()));
+        assert!(v.exists, "no first-run Create vault over an existing file");
+        assert!(v.error.as_deref().unwrap().contains("newer PMXSpan"));
+        assert!(!UnlockView::new(false, None).exists);
     }
 }

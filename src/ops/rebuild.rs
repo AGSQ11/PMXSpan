@@ -189,6 +189,8 @@ pub async fn run(env: Env, spec: RebuildSpec, ctx: JobCtx) -> anyhow::Result<Str
     if spec.start.unwrap_or(was_running) {
         ctx.progress(0.9);
         guest::power(client, &ctx, &g, PowerAction::Start).await?;
+        let catalog_id = if let RebuildSource::Catalog { entry } = &spec.source { entry.id.as_str() } else { "" };
+        crate::hostkeys::after_provision(client, &ctx, &env.server_id, &g, catalog_id, true);
     }
     Ok(format!("{} {} rebuilt on {}", g.kind.label(), g.vmid, g.node))
 }

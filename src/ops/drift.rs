@@ -54,11 +54,25 @@ pub async fn scan(client: &PveClient, guests: Vec<Resource>) -> Vec<GuestNet> {
     out
 }
 
+/// Releases the addresses IPAM holds for `vmid` after the cluster itself confirms
+/// the VMID is free. The resource list used by [`compare`] is filtered by the
+/// credential's permissions and may be stale, so it is not proof of deletion;
+/// `/cluster/nextid?vmid=` sees every guest.
+pub async fn release_orphan(client: &PveClient, ipam: &parking_lot::Mutex<IpamDb>, server_id: &str, vmid: u64) -> anyhow::Result<String> {
+    if !guest::vmid_free(client, vmid).await? {
+        anyhow::bail!("VMID {vmid} still exists on the cluster (it is not in the list this credential can see); nothing was released");
+    }
+    let ips = ipam.lock().release_guest_note(server_id, vmid, "guest gone (drift)")?;
+    Ok(format!("released {}", ips.join(", ")))
+}
+
 /// Compares IPAM with what the cluster reports. `all_vmids` must hold every
 /// VMID on the cluster (templates too) so nothing is called an orphan by mistake.
+/// An empty list means "not loaded (or not visible)", never "no guests": no
+/// orphans are reported from it.
 pub fn compare(server_id: &str, ipam: &IpamDb, guests: &[GuestNet], all_vmids: &[u64], managed_tag: &str) -> Vec<DriftItem> {
     let mut out = Vec::new();
-    for a in ipam.assignments.iter().filter(|a| a.server_id == server_id) {
+    for a in ipam.assignments.iter().filter(|a| a.server_id == server_id && !all_vmids.is_empty()) {
         if let Some(v) = a.vmid
             && !all_vmids.contains(&v)
         {
@@ -163,6 +177,8 @@ mod tests {
         let d = compare("s", &db, &guests, &[100, 101, 102, 103, 9000], "PMXSpan");
         let kinds: Vec<(u64, &str)> = d.iter().map(|i| (i.vmid, kind_label(&i.kind))).collect();
         assert_eq!(kinds, vec![(101, "not in IPAM"), (101, "differs"), (102, "no IPAM record"), (199, "guest gone")]);
+        // An unloaded or empty resource list proves nothing: no orphans from it.
+        assert!(compare("s", &db, &[], &[], "PMXSpan").iter().all(|i| i.kind != DriftKind::Orphan));
         // Other servers' records are ignored.
         assert!(compare("other", &db, &guests, &[], "PMXSpan").iter().all(|i| i.kind != DriftKind::Orphan));
     }

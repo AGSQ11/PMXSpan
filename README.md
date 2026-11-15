@@ -52,7 +52,11 @@ no agents on the nodes.
 | **Placement controls** | A **VMID range** per server (new guests and clones get the lowest free ID in it) and **maintenance mode** for nodes, which auto-placement skips. |
 | **Create extras** | **Custom cloud-init** files (`cicustom` user/vendor/network snippets from the nodes, with a default per catalog image), **HA** on create (default per catalog image, optional group), and a generated **Ed25519 key pair** (private key saved locally, optionally passphrase-protected; the public key goes into the guest). |
 | **Recovery copies** | Export the config, firewall, HA settings, snapshot names and IPAM records of one guest or of every listed guest to a JSON file. |
-| **Consoles** | noVNC/xterm.js open in your browser, and SPICE opens in virt-viewer. |
+| **Consoles** | **In-app consoles** in their own windows: a VNC viewer for VM displays and a terminal for container consoles, VM serial ports and node shells, over the same authenticated connection as the rest of the app (no browser login, VNC works with API tokens). The Proxmox web console (noVNC/xterm.js in your browser) and SPICE (virt-viewer) stay available from the console menu. |
+| **SSHSpan integration** | With [SSHSpan](#working-with-sshspan) installed, **Connect with SSHSpan** on a guest, a guest row or a node opens an SSH session there after you confirm the address, user and port, and **Send to SSHSpan…** hands many guests (and nodes) over at once after a review. SSHSpan can send back "open this guest" links and public keys, which always land in a confirmation card. Only names, addresses, user names and public keys cross; never a password or private key. Without SSHSpan the buttons are disabled with a hint, or hidden in Settings. |
+| **SSH host keys** | PMXSpan reads each VM's SSH host keys through the guest agent (Refresh on the Summary, and automatically after its own create and rebuild) and shows their SHA-256 fingerprints with a copy button, so you can check the first connection with any SSH client. A rebuild that changes the keys is recorded as a rotation. |
+| **Public keys from this computer** | **Add from this computer…** in the create wizard, the Cloud-Init tab and Settings lists the `~/.ssh/*.pub` files (type, comment, fingerprint), skips keys already in the field and marks files it cannot read. |
+| **MCP server** | Optional and **off by default**: a local [MCP](https://modelcontextprotocol.io/) endpoint so AI assistants on this computer (such as SSHSpan's) can read the connected cluster (guests, IPs, tasks, backups, IPAM) and, only if you allow it, run a few non-destructive actions. Loopback only, bearer token kept in the vault, every action audited. See [MCP server](#mcp-server-for-ai-assistants-such-as-sshspans). |
 
 ### Not included yet
 
@@ -215,16 +219,37 @@ CI (`.github/workflows/build.yml`) runs format, clippy and tests, then builds re
 2. **Servers → Add server**. Enter the host and port (8006). For auth, an API token is recommended: create one under *Datacenter → Permissions → API Tokens*. For TLS, keep *Pin certificate* and click **Fetch from server**. Compare the fingerprint with *Node → System → Certificates* or with `pvenode cert info`.
 3. **Test connection** to see diagnostics, then **Save & connect**.
 
-Browser consoles need you to be logged in to the Proxmox web UI in that browser. API tokens can't open consoles.
+In-app consoles need no browser login. VM display (VNC) consoles work with API tokens and with password logins. Terminal consoles (containers, VM serial ports, node shells) need a server profile that logs in with a **password**: Proxmox's `termproxy` checks the `user:ticket` line by logging that user in, and an API token id such as `root@pam!pmxspan` is not a user name it accepts. PMXSpan says so before it tries, and offers the browser console instead. The browser console (*Console → Open in browser*) still needs you to be logged in to the Proxmox web UI in that browser.
+
+## Consoles
+
+**Console** on a guest page (or in the guest list) opens the guest's console in a new PMXSpan window: the VNC display for VMs, the terminal for containers, and the first serial port for a VM without a display (`vga: none` / `serial0`). The arrow next to it offers *Serial console (serialN)* for every serial port the VM has, the VNC display, *Open in browser* (the Proxmox web console) and *SPICE* (virt-viewer). **Shell** on a node page opens a node shell. Several consoles can be open at once, and they keep running while you work in the main window. Closing a console window ends its session; locking PMXSpan or disconnecting closes all of them.
+
+What runs where and what is sent:
+
+1. PMXSpan asks the node to start a console proxy: `POST /nodes/{node}/qemu/{vmid}/vncproxy` with `websocket=1` (VNC), or `POST .../termproxy` for a container, a VM serial port (`serial=serialN`) or a node shell (`/nodes/{node}/termproxy`, `cmd=login`). The reply holds a port and a one-time ticket that must be used within about 10 seconds.
+2. Right away it opens `GET .../vncwebsocket?port=..&vncticket=..` as a WebSocket (`Sec-WebSocket-Protocol: binary`) on its own HTTPS connection: same certificate pinning, same API token header or login cookie as every other API call. Proxmox's `pveproxy` forwards the socket to the proxy on the node that runs the guest.
+3. VNC: the socket carries RFB (the VNC protocol). QEMU asks for VNC authentication; PMXSpan answers with the `password` the `vncproxy` call returns (current nodes generate one and return the ticket as `password:ticket`), or with the ticket itself on older nodes. PMXSpan offers ZRLE, CopyRect and Raw (plus the Cursor and DesktopSize pseudo-encodings), keeps the screen as a texture updated per rectangle, and sends keys as X11 keysyms and the mouse as RFB pointer events (wheel = buttons 4/5). The toolbar has Ctrl+Alt+Del, fit-to-window / 1:1, a clipboard panel (*Type it* types text as key presses and works with any guest; *Send as clipboard* uses RFB cut-text, Latin-1 only, and needs a guest clipboard agent), a full refresh and Reconnect.
+4. Terminal: PMXSpan sends `user:ticket` and waits for `OK`, then sends keystrokes as `0:<bytes>:<data>`, the window size as `1:<cols>:<rows>:` (on connect and on every resize) and a keep-alive `2` every 30 seconds. Output is drawn by a built-in VT100/xterm emulator with 16, 256 and true colours, bold, italic, underline and inverse, scrollback (mouse wheel, Shift+PageUp/PageDown), selection with Ctrl+Shift+C, paste with Ctrl+Shift+V or a right click (multi-line paste asks first), and the bell as a status-line notice.
+
+A VM serial console needs a serial port on the VM (`serial0: socket`, *Hardware → Add → Serial Port*, then a restart) and a guest that runs a login on it (`console=ttyS0` for Linux). VMs created from the OS image catalog already have one. Users need `VM.Console` on the guest, or `Sys.Console` for node shells.
+
+Settings → Preferences → *Consoles* sets the terminal font size, scrollback lines, the default VNC scaling and the multi-line paste confirmation.
+
+Limitations: SPICE is not shown in-app (the *SPICE* item still opens virt-viewer); no audio; the Tight and JPEG encodings are not used (ZRLE is what QEMU sends); RFB clipboards carry Latin-1 only; keyboard input is sent as keysyms, so QEMU's keymap decides the scancodes and keys egui does not report (Print Screen, Pause, the Windows key outside macOS' Cmd) cannot be sent; terminal consoles need a password login (see above).
 
 ## Data locations
 
 | | Linux | Windows |
 |---|---|---|
 | Config, vault, OS catalog, schedules and alert rules | `~/.config/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\config\` |
-| IPAM database, logs | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
+| IPAM database, SSH host keys (`hostkeys.json`), logs, MCP audit log (`mcp-audit.log`) | `~/.local/share/pmxspan/` | `%APPDATA%\PMXSpan\PMXSpan\data\` |
+| SSHSpan handoff files (deleted after 24 h) | `$XDG_RUNTIME_DIR/pmxspan/handoff/` (else `~/.local/share/pmxspan/handoff/`) | `%LOCALAPPDATA%\PMXSpan\handoff\` |
+| Single-instance socket | `$XDG_RUNTIME_DIR/pmxspan/ipc.sock` (else in the data folder) | named pipe `\\.\pipe\pmxspan-<hash>` |
 
-**Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it.
+**Portable mode:** put an empty file named `portable` next to the executable and everything is stored in `./data` beside it (including the single-instance socket).
+
+On macOS the handoff files go to `~/Library/Application Support/pmxspan/handoff/`.
 
 Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose logs.
 
@@ -234,7 +259,7 @@ Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose 
 2. In **Servers → Edit**, set the catalog download storages: a storage with the `import` content type for VM images and one with `vztmpl` for container templates. A fallback storage is optional. (In Proxmox, enable the content type under Datacenter → Storage → Edit → Content. `import` needs Proxmox VE 8.2 or newer.)
 3. Download timeouts are in **Settings**: a download whose task log stops growing for the *stall* time is aborted and retried elsewhere.
 
-VMs created from a catalog image get a cloud-init drive and a serial console (`serial0: socket`), and their boot disk is grown to the size you choose. A catalog entry's `config` keys (for example `bios: ovmf`) are applied on create and reinstall. Catalogs get shared, so only harmless keys are accepted: CPU, memory, firmware, machine, display, agent, boot order, tags and startup for VMs; CPU, memory, swap, console, timezone, tags, startup and the `nesting`/`keyctl`/`fuse` features for containers. Anything touching disks, networks, cloud-init, host access (`args`, `hookscript`, passthrough, bind mounts) or container privileges is rejected.
+VMs created from a catalog image get a cloud-init drive and a serial console (`serial0: socket`), and their boot disk is grown to the size you choose. A catalog entry's `config` keys (for example `bios: ovmf`) are applied on create and reinstall. Catalogs get shared, so only harmless keys are accepted: CPU model and options, firmware, machine, display, agent, boot order, tags and startup for VMs; swap, console, timezone, tags, startup and the `nesting`/`keyctl`/`fuse` features for containers. CPU count and memory (`cores`, `sockets`, `vcpus`, `memory`) are ignored in a catalog: you size the guest in the wizard, and tenant limits check that size. Anything touching disks, networks, cloud-init, host access (`args`, `hookscript`, passthrough, bind mounts) or container privileges is rejected.
 
 ## Running schedules unattended
 
@@ -250,13 +275,74 @@ crontab -e
 
 On Windows, create a Task Scheduler task that runs every 5 minutes with the program `C:\Program Files\PMXSpan\pmxspan.exe` and the arguments `--run-schedules --password-file C:\Users\me\pmxspan-master.txt`. Missed runs are caught up for a while (snapshots up to 6 hours late, power actions up to 30 minutes), never repeated. Alerts are only checked while the app is open.
 
+## MCP server (for AI assistants such as SSHSpan's)
+
+PMXSpan can act as a local **MCP (Model Context Protocol) server**, so an AI assistant on the same computer can look at your cluster through PMXSpan: which VM a terminal is connected to, what state it is in, its IPs, snapshots, backups and recent tasks. Its first user is SSHSpan's AI assistant, but it is a plain MCP server (Streamable HTTP, protocol revisions 2025-11-25, 2025-06-18 and 2025-03-26) that any MCP client can use.
+
+- **Off by default.** Turn it on in **Settings → MCP server**. While it is off nothing listens, and PMXSpan, `--run-schedules` and everything else behave exactly as before.
+- **Local only.** It listens on `127.0.0.1:48731` (and `[::1]` when available; the port is configurable) at the path `/mcp`, refuses non-loopback peers, `Host` headers and browser `Origin`s that are not loopback, bodies over 1 MiB and more than 32 connections at once.
+- **Token.** Every request needs `Authorization: Bearer <token>`. The token (32 random bytes, base64url) is generated when you first enable the server, stored encrypted in the vault, and shown once; **Regenerate** replaces it and ends every session.
+- **Only while unlocked.** The server runs while PMXSpan is open and the vault is unlocked. Locking the vault, switching it off, changing the port or quitting stops it (open requests get 2 seconds to finish). It is never started by `--run-schedules`.
+- **Answers for the connected server.** Every tool takes an optional `server` (profile id or name) and answers only for the server PMXSpan is connected to; for any other it says to connect first.
+
+**Read-only tools** (always available while the server runs):
+
+| Tool | What it returns |
+|---|---|
+| `list_servers` | The server profiles and which one is connected. |
+| `list_nodes` | Nodes with status, CPU, memory, uptime and maintenance mode. |
+| `list_guests` | VMs and containers (filter by name, tag, pool, status, node) with VMID, kind, node, status, pool, tags and main IPs from IPAM and recently seen guest-agent addresses. |
+| `get_guest` | One guest: status, resources, node, pool, tags, HA state, all known IPs (IPAM, static config, guest agent), snapshot names and a configuration summary without secrets. |
+| `find_by_ip` | Which guest (or node) owns an address: IPAM first, then the nodes, static guest network config, then the guest agents and container interfaces of running guests. SSHSpan uses it to map a terminal tab to a VM. |
+| `ipam_lookup` | Who holds an address, or whether it is free and in which pool; without an address, the pools with used and free counts. |
+| `list_tasks` | Recent tasks (optionally for one guest or node). |
+| `get_task_log` | A task's status and the tail of its log. |
+| `get_node_status` | A node's CPU, load, memory, swap, root disk, kernel, version and uptime. |
+| `list_backups` | Backups on the backup storages, newest first, optionally for one guest or node. |
+| `list_snapshots` | A guest's snapshots. |
+| `list_ipam_drift` | Differences between IPAM and the guests' network configuration. |
+
+**Action tools** appear only when **Allow actions over MCP** is on (off by default): `power` (start, shutdown, reboot, stop, suspend, resume; waits up to 30 s and returns the UPID), `snapshot_create`, `agent_exec` (runs a program through the QEMU guest agent, output capped at 16 KiB, refused when the agent is not running) and `set_tags`.
+
+**Always refused**, even with actions allowed: destroy, rebuild/reinstall, snapshot rollback, deleting snapshots or backups, restore, migrate, firewall and access changes (users, tokens, ACLs, passwords). A client that asks for one gets a message saying to do it in PMXSpan itself.
+
+**Audit.** Every action attempt, allowed or refused, is written to PMXSpan's log (with its arguments, after the usual credential redaction) and appended to `mcp-audit.log` in the data folder as one line: time, session id, tool, SHA-256 of the arguments and the outcome (`ok`, `error` or `refused`), for example `2026-11-08T12:34:56Z session=3f9c… tool=power args_sha256=5b1e… outcome=ok`.
+
+**Tool definitions are stable.** Clients such as SSHSpan pin a hash of each tool definition and ask you to approve a tool again when it changes, so names, descriptions and schemas do not change between restarts or releases unless a release says so (a test keeps them identical to `tests/mcp_tools.golden.json`).
+
+### Connecting SSHSpan
+
+1. In PMXSpan: **Settings → MCP server**, tick **Enabled**, and copy the token it shows.
+2. In SSHSpan: **Settings → AI assistant → MCP servers → Add MCP server**: name `pmxspan`, URL `http://127.0.0.1:48731/mcp` (or your port), auth **Bearer**, and paste the token as the secret. SSHSpan warns that plain `http://` is only allowed for loopback addresses; that is expected here, since the connection never leaves your computer.
+3. Enable the PMXSpan tools you want in SSHSpan's tool list.
+
+Other MCP clients: Streamable HTTP transport, the same URL and header `Authorization: Bearer <token>`. The server answers `POST` with `application/json`, `DELETE` ends a session, and `GET` returns 405 (it offers no event stream).
+
 ## Custom cloud-init files
 
 Proxmox's API cannot upload snippets, so put your cloud-init files on the nodes yourself, in a storage with the `snippets` content type (for `local` that is `/var/lib/vz/snippets/`). PMXSpan lists them in the create wizard, the Cloud-Init tab and per catalog image (*OS image catalog → Custom cloud-init*, stored on this computer only and never exported or imported), and sets the VM's `cicustom`. Rebuilds keep it.
 
+## Working with SSHSpan
+
+[SSHSpan](https://github.com/AGSQ11/SSHSpan) is an SSH client and key manager. PMXSpan works the same without it; with it, guests and nodes open in SSH in one click and their host keys are checked against the ones PMXSpan read.
+
+**What crosses, and what never does.** PMXSpan hands SSHSpan host names and addresses, ports, user names, display names, the server profile's id and name, pool and node names, guest tags and the public SSH host keys it read. SSHSpan hands PMXSpan "open this guest/node" requests and public keys. Passwords, API tokens, private keys and vault contents never cross, and nothing received is applied on its own.
+
+**Finding SSHSpan.** PMXSpan looks for SSHSpan when you first see one of its buttons: the path set in **Settings → SSHSpan** (absolute, an existing file, `.exe` on Windows), then on Windows the installed-programs registry, `%ProgramFiles%\SSHSpan\sshspan.exe`, `%LOCALAPPDATA%\Programs\SSHSpan\sshspan.exe` and `PATH`, and on Linux/macOS `PATH`, `/usr/bin`, `/usr/local/bin`, `~/.local/bin`, `/opt/SSHSpan/sshspan`, `~/Applications/SSHSpan*.AppImage` and `/Applications/SSHSpan.app`. The first time it starts a program it found on its own, it shows you the exact path and asks; it asks again if that path changes. Without an executable it uses the `sshspan://` link handler registered with the system, if there is one. Otherwise the SSHSpan buttons are disabled with the hint *"SSHSpan was not found on this computer. Install it or set its path in Settings."* Untick **SSHSpan actions** in Settings to hide them all.
+
+**Connect with SSHSpan** (guest header, guest list, node page). The address is the guest's IPAM main IPv4, else its IPAM main IPv6, else an address its guest agent reports (no loopback or link-local, IPv4 first), else a container's static `ip=`. The user is the VM's cloud-init user, else the catalog image's default user, else `root`; containers and nodes use `root`, and nodes use their cluster address from `/cluster/status`. A small card shows host, user and port (you can change them; PMXSpan remembers your values for that guest until it closes) and the host-key status, then SSHSpan's Quick connect dialog opens prefilled.
+
+**Host keys.** PMXSpan sends the host keys it read as *proposed* keys: SSHSpan accepts a server silently only when its live key matches one, refuses with both fingerprints when it differs, and after a PMXSpan rebuild (the link then says when the keys rotated) offers to replace the key it saved. Keys that changed without a rebuild are shown with a warning on the Summary and are never presented as a rotation. Containers and nodes have no host-key source in the Proxmox API; SSHSpan then asks you to trust the key on first connect, as usual.
+
+**Send to SSHSpan…** (Guests toolbar). A review lists every guest of the connected server, the ones in your current list filter ticked, with the address, user, the SSHSpan category it will go to (*Proxmox › server › pool*, or *no pool*), the host-key status, and why a row cannot be sent (no address, an invalid user name). Nodes can be added with a tick. **Send** writes the list to a private handoff file (mode 0600 in a 0700 folder, see Data locations) and opens SSHSpan's own import review, which checks the file's SHA-256 and age before reading it. Handoff files left behind are deleted when PMXSpan next starts.
+
+**Links from SSHSpan.** SSHSpan opens `pmxspan://guest?v=1&cluster=<profile id>&vmid=<id>` and `pmxspan://node?v=1&cluster=<profile id>&node=<name>` ("Manage in PMXSpan") and `pmxspan://add-key?v=1&key=<public key line>&name=<key name>`. Every link is validated (version 1 only, at most 8192 bytes, every field checked) and a bad one is refused with a message. A locked vault is unlocked first (the link waits up to 10 minutes); connecting to a different server asks first; then the guest or node page opens and the window comes to the front. An offered key is shown with its type, SHA-256 fingerprint and comment, and is added only where you choose: Settings' default SSH keys, the open Create wizard, or the open Cloud-Init tab (saved with that form). Keys already there are reported, not added twice.
+
+**One window.** Starting PMXSpan while it is already running brings the running window to the front, and a `pmxspan://` link given to the second start is handed over to it (through a socket only your user can open, at most 64 KiB per message). `pmxspan --run-schedules` is not affected. The Debian package, AppImage and Windows installer register PMXSpan for `pmxspan://` links.
+
 ## Trying it without a cluster
 
-`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules and ipsets, backups (including a Proxmox Backup Server storage with browsable files), cloud-init snippets, URL downloads (any URL containing `404` fails like a missing image), IPAM-friendly networking and a guest agent. Start it with:
+`tools/mock_pve.py` is an in-memory imitation of the Proxmox API with two nodes, VMs, containers, templates, storages, tasks, snapshots, firewall rules and ipsets, backups (including a Proxmox Backup Server storage with browsable files), cloud-init snippets, URL downloads (any URL containing `404` fails like a missing image), IPAM-friendly networking and a guest agent (which also returns SSH host keys for VMs). Start it with:
 
 ```bash
 python3 tools/mock_pve.py --port 8006
@@ -268,6 +354,8 @@ Then add a server `127.0.0.1:8006` and log in with:
 - token `root@pam!pmxspan`, secret `mocktoken`, or
 - user `totp@pam`, password `mockpass`, TOTP `123456`.
 
+The mock also serves consoles: VM 100 shows a moving test pattern over VNC (and has a serial port, VM 101 has none), and container or node terminals run a real `bash` on a pseudo-terminal on Linux (an echo shell elsewhere, or with `MOCK_ECHO=1`). Key, pointer and resize events are printed as `MOCK-VNC ...` / `MOCK-TERM ...` lines.
+
 ## Project layout
 
 ```
@@ -277,13 +365,22 @@ src/
                 create, rebuild, OS catalog, IP assignment, placement, guest ops,
                 diagnostics, bandwidth, tenant, pool limits, IPAM drift,
                 config export, schedules
+  console/      in-app consoles: WebSocket transport over the API client (ws.rs),
+                VNC session (vnc.rs) and keysym mapping (keysym.rs), termproxy
+                protocol (term.rs), terminal keys (termkeys.rs) and rendering model (screen.rs)
   automation.rs schedules, due-time logic and usage alerts
   headless.rs   `pmxspan --run-schedules`
+  integrations/ SSHSpan: discovery and launch, sshspan:// / pmxspan:// links, handoff bundle,
+                address resolution, single-instance IPC
+  hostkeys.rs   guest SSH host keys (hostkeys.json)
+  sshkey.rs     SSH public key lines and SHA-256 fingerprints
+  pubkeys.rs    ~/.ssh/*.pub listing for the key picker
   ipam.rs       local IP address management
   vault.rs      encrypted credential storage
   jobs.rs       background jobs with step logs
+  mcp/          optional local MCP server: HTTP endpoint, JSON-RPC protocol, tools, audit log
   rt.rs         UI <-> tokio bridge (Fetch handles)
-  ui/           egui views
+  ui/           egui views (ui/console/: the console windows)
 assets/fonts/   bundled fonts and their licenses
 packaging/      app icon (make_icon.py), Debian package, Windows installer
 screenshots/    the images in this README
@@ -291,7 +388,7 @@ tools/mock_pve.py        mock Proxmox VE API for development/demo
 tools/make_icon_font.py  rebuilds the icon font subset
 ```
 
-Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations.
+Run the unit tests with `cargo test`. They cover IPAM allocation rules (main addresses, atomic multi-allocation), catalog parsing/validation, IP config rewriting, placement ordering, NIC/cloud-init property strings, SSH-key encoding, bandwidth integration, UPID parsing, the vault crypto (round trip, entry binding, upgrading older vaults), log redaction, private file writes, the catalog config allowlist, IPAM history and drift, pool limits, schedule due times, alert firing and resolving, SSH key generation, fingerprint parsing and moving data to new folder locations, and for the SSHSpan integration: link building and percent-encoding (IPv6, unicode, the 8192-byte cap), `pmxspan://` parsing and every refusal, the handoff bundle (JSON shape, SHA-256, private file mode), host-key parsing, fingerprints against known `ssh-keygen -l` values and rotation rules, address/user resolution order, SSHSpan discovery against a fake `PATH`, the single-instance socket and its framing, and the public-key picker, and the MCP server (auth, Origin/peer checks, sessions, JSON-RPC errors, action gating, the audit log, the tool-definition golden file, plus end-to-end runs against `tools/mock_pve.py` including SSHSpan's exact request sequence; skipped when `python3` or `openssl` is missing), and the consoles: termproxy framing, the WebSocket adapter, keysym and terminal key mapping, the terminal rendering model and the proxy request builders. End-to-end console tests start `tools/mock_pve.py` (skipped when `python3` or `openssl` is missing) and drive a VNC session (with an API token) and a terminal session through the real client.
 
 ## Credits
 

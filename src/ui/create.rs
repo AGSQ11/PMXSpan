@@ -62,6 +62,7 @@ pub struct CreateView {
     ha_group: String,
     key_passphrase: String,
     custom_ci: super::guest::cloudinit::CiPicker,
+    pubkeys: super::pubkeys::Picker,
     /// Catalog entry whose custom cloud-init default was last applied.
     custom_ci_for: Option<String>,
     node: Option<String>,
@@ -130,6 +131,7 @@ impl Default for CreateView {
             ha_group: String::new(),
             key_passphrase: String::new(),
             custom_ci: Default::default(),
+            pubkeys: Default::default(),
             custom_ci_for: None,
             node: None,
             storage: None,
@@ -648,6 +650,10 @@ impl CreateView {
                                     .hint_text("passphrase (optional)")
                                     .desired_width(180.0),
                             );
+                            self.pubkeys.button(ui);
+                            if let Some(m) = self.pubkeys.show(ui.ctx(), "create", &mut self.sshkeys) {
+                                actions.toast_ok(m);
+                            }
                         });
                         ui.end_row();
                         if self.kind == GuestKind::Qemu {
@@ -748,6 +754,11 @@ impl CreateView {
                 }
             });
         });
+    }
+
+    /// Adds a public key offered by SSHSpan; false when it is already listed.
+    pub fn add_ssh_key(&mut self, key: &crate::sshkey::PublicKey) -> bool {
+        crate::sshkey::append_unique(&mut self.sshkeys, key)
     }
 
     /// Generates an SSH key pair, saves the private key (0600) and its `.pub`,

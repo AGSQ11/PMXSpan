@@ -305,13 +305,25 @@ impl AutomationStore {
                 s.last_run = d.last_run;
                 s.last_ok = d.last_ok;
                 s.last_result = d.last_result;
+                s.enabled &= d.enabled;
             }
         }
     }
 
-    /// Records a run's outcome.
+    /// Revokes the schedules made for a destroyed guest; returns how many went.
+    pub fn forget_guest(&mut self, server_id: &str, vmid: u64) -> usize {
+        let before = self.schedules.len();
+        self.schedules.retain(|s| !(s.server_id == server_id && s.vmid == vmid));
+        before - self.schedules.len()
+    }
+
+    /// Records a run's outcome. A schedule whose VMID now names a different
+    /// guest is switched off, so it never runs against it later.
     pub fn record(&mut self, id: &str, at: i64, result: &anyhow::Result<String>) {
         if let Some(s) = self.schedules.iter_mut().find(|s| s.id == id) {
+            if matches!(result, Err(e) if e.downcast_ref::<GuestReplaced>().is_some()) {
+                s.enabled = false;
+            }
             s.last_run = at;
             s.last_ok = result.is_ok();
             s.last_result = match result {
@@ -321,6 +333,18 @@ impl AutomationStore {
         }
     }
 }
+
+/// A schedule's VMID now belongs to a guest other than the one it was made for.
+#[derive(Debug)]
+pub struct GuestReplaced(pub String);
+
+impl std::fmt::Display for GuestReplaced {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for GuestReplaced {}
 
 /// Name prefix of the snapshots one schedule takes. Retention only ever
 /// deletes snapshots with its own prefix, never other schedules' or the user's.

@@ -160,6 +160,8 @@ fn run(paths: &AppPaths) -> anyhow::Result<usize> {
     for s in &store.schedules {
         if let Some(c) = current.schedules.iter_mut().find(|c| c.id == s.id) {
             c.last_run = c.last_run.max(s.last_run);
+            // Switched off by a run (guest replaced) stays off.
+            c.enabled &= s.enabled;
             if s.last_run >= c.last_run {
                 c.last_ok = s.last_ok;
                 c.last_result = s.last_result.clone();

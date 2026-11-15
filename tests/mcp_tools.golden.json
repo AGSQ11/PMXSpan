@@ -1,0 +1,509 @@
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Lists the Proxmox VE server profiles configured in PMXSpan and shows which one is connected. Other tools answer only for the connected server.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_servers",
+    "title": "List servers"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Lists the cluster's nodes with status, CPU, memory, uptime and whether PMXSpan has them in maintenance.",
+    "inputSchema": {
+      "properties": {
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_nodes",
+    "title": "List nodes"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Lists VMs and containers with VMID, name, kind, node, status, pool, tags and main IP addresses (from PMXSpan's IPAM and, when recently seen, the guest agent). All filters are optional and combine.",
+    "inputSchema": {
+      "properties": {
+        "include_templates": {
+          "description": "Include templates (default false).",
+          "type": "boolean"
+        },
+        "limit": {
+          "description": "Maximum rows (default 200).",
+          "maximum": 1000,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "name": {
+          "description": "Substring of the guest name (case-insensitive).",
+          "type": "string"
+        },
+        "node": {
+          "description": "Only guests on this node.",
+          "type": "string"
+        },
+        "pool": {
+          "description": "Only guests in this resource pool.",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "status": {
+          "description": "Only guests in this state, e.g. running, stopped, paused.",
+          "type": "string"
+        },
+        "tag": {
+          "description": "Only guests carrying this tag.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_guests",
+    "title": "List guests"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Shows one guest: status, CPU/memory/disk, node, pool, tags, HA state, every known IP address (IPAM, static config, guest agent), snapshot names and a short configuration summary. Secrets are never included.",
+    "inputSchema": {
+      "properties": {
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Guest VMID, e.g. 100.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vmid"
+      ],
+      "type": "object"
+    },
+    "name": "get_guest",
+    "title": "Get guest"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Finds which guest (or node) owns an IP address: checks PMXSpan's IPAM first, then the nodes, static guest network config, and finally the guest agents and container interfaces of running guests. Use it to map an SSH session's host address to a VM or container.",
+    "inputSchema": {
+      "properties": {
+        "ip": {
+          "description": "IPv4 or IPv6 address, e.g. 10.0.0.15 (a /prefix is ignored).",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "ip"
+      ],
+      "type": "object"
+    },
+    "name": "find_by_ip",
+    "title": "Find guest by IP"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Queries PMXSpan's local IP address management: with an address, shows who holds it (or whether it is free and in which pool); without one, lists the pools usable on the server with their used and free counts.",
+    "inputSchema": {
+      "properties": {
+        "address": {
+          "description": "IP address to look up.",
+          "type": "string"
+        },
+        "pool": {
+          "description": "Only this pool (name or id).",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "ipam_lookup",
+    "title": "IPAM lookup"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Lists recent Proxmox tasks (newest first) with type, target, user, start time, status and UPID. Pass a UPID to get_task_log for its output.",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "description": "Maximum rows (default 20).",
+          "maximum": 100,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "node": {
+          "description": "Only tasks on this node.",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Only tasks about this guest.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_tasks",
+    "title": "List tasks"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Shows a task's status and the last lines of its log.",
+    "inputSchema": {
+      "properties": {
+        "lines": {
+          "description": "Lines from the end (default 50).",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "upid": {
+          "description": "Task id (UPID:...), from list_tasks or an action's result.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "upid"
+      ],
+      "type": "object"
+    },
+    "name": "get_task_log",
+    "title": "Get task log"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Shows one node's CPU, load, memory, swap, root disk, kernel, Proxmox VE version and uptime.",
+    "inputSchema": {
+      "properties": {
+        "node": {
+          "description": "Node name.",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "node"
+      ],
+      "type": "object"
+    },
+    "name": "get_node_status",
+    "title": "Get node status"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Lists backups on the cluster's backup storages (newest first), optionally for one guest or one node.",
+    "inputSchema": {
+      "properties": {
+        "limit": {
+          "description": "Maximum rows (default 50).",
+          "maximum": 500,
+          "minimum": 1,
+          "type": "integer"
+        },
+        "node": {
+          "description": "Only storages seen from this node.",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Only backups of this guest.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_backups",
+    "title": "List backups"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Lists a guest's snapshots, oldest first, with time, description and whether RAM state is included.",
+    "inputSchema": {
+      "properties": {
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Guest VMID, e.g. 100.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vmid"
+      ],
+      "type": "object"
+    },
+    "name": "list_snapshots",
+    "title": "List snapshots"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": true
+    },
+    "description": "Compares PMXSpan's IPAM with the guests' network configuration: addresses kept for deleted guests, static addresses IPAM does not track, main addresses that differ, and PMXSpan-created guests without an IPAM record.",
+    "inputSchema": {
+      "properties": {
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        }
+      },
+      "type": "object"
+    },
+    "name": "list_ipam_drift",
+    "title": "List IPAM drift"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Starts, shuts down, reboots, stops (hard), suspends or resumes a guest. Waits up to 30 seconds for the Proxmox task and returns its UPID and outcome. Shutdown falls back to a hard stop after 3 minutes, like in PMXSpan.",
+    "inputSchema": {
+      "properties": {
+        "action": {
+          "description": "What to do.",
+          "enum": [
+            "start",
+            "shutdown",
+            "reboot",
+            "stop",
+            "suspend",
+            "resume"
+          ],
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Guest VMID, e.g. 100.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vmid",
+        "action"
+      ],
+      "type": "object"
+    },
+    "name": "power",
+    "title": "Power action"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Takes a snapshot of a guest. Waits up to 30 seconds for the task and returns its UPID and outcome.",
+    "inputSchema": {
+      "properties": {
+        "description": {
+          "description": "Optional description.",
+          "type": "string"
+        },
+        "name": {
+          "description": "Snapshot name: starts with a letter; letters, digits, '-' and '_'; at most 40 characters.",
+          "type": "string"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Guest VMID, e.g. 100.",
+          "minimum": 1,
+          "type": "integer"
+        },
+        "vmstate": {
+          "description": "Include the VM's RAM (QEMU only, default false).",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "vmid",
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "snapshot_create",
+    "title": "Create snapshot"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "idempotentHint": false,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Runs a command inside a running QEMU VM through the QEMU guest agent (no shell: pass the program and its arguments) and returns the exit code and output (capped at 16 KiB each). Refused when the agent is not running; containers have no guest agent.",
+    "inputSchema": {
+      "properties": {
+        "argv": {
+          "description": "Program and arguments, e.g. [\"systemctl\", \"status\", \"nginx\"].",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 64,
+          "minItems": 1,
+          "type": "array"
+        },
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "stdin": {
+          "description": "Optional data for the command's standard input.",
+          "type": "string"
+        },
+        "vmid": {
+          "description": "Guest VMID, e.g. 100.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vmid",
+        "argv"
+      ],
+      "type": "object"
+    },
+    "name": "agent_exec",
+    "title": "Run command via guest agent"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "idempotentHint": true,
+      "openWorldHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Replaces a guest's Proxmox tags with the given list (an empty list removes all tags).",
+    "inputSchema": {
+      "properties": {
+        "server": {
+          "description": "PMXSpan server profile id or name. Default: the server PMXSpan is connected to.",
+          "type": "string"
+        },
+        "tags": {
+          "description": "Tags: letters, digits, '_', '-', '+' and '.', starting with a letter, digit or '_'.",
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 32,
+          "type": "array"
+        },
+        "vmid": {
+          "description": "Guest VMID, e.g. 100.",
+          "minimum": 1,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "vmid",
+        "tags"
+      ],
+      "type": "object"
+    },
+    "name": "set_tags",
+    "title": "Set tags"
+  }
+]

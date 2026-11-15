@@ -26,6 +26,7 @@ pub struct CloudInitTab {
     ipam_preferred: String,
     regenerate: bool,
     custom: CiPicker,
+    pubkeys: crate::ui::pubkeys::Picker,
 }
 
 /// Picks custom cloud-init snippet files (`cicustom`) from the snippets the
@@ -101,8 +102,16 @@ impl CloudInitTab {
         self.custom.value = CiCustom::parse(&s("cicustom"));
     }
 
+    /// Adds a public key offered by SSHSpan (saved with the form); false when it is already listed.
+    pub fn add_ssh_key(&mut self, key: &crate::sshkey::PublicKey) -> bool {
+        crate::sshkey::append_unique(&mut self.sshkeys, key)
+    }
+
     pub fn ui(&mut self, ui: &mut egui::Ui, gc: &GCtx, actions: &mut Actions) {
         self.load(gc);
+        if let Some(m) = self.pubkeys.show(ui.ctx(), "cloudinit", &mut self.sshkeys) {
+            actions.toast_ok(format!("{m}; click Save to apply"));
+        }
         let Some(cfg) = gc.config else {
             ui.spinner();
             return;
@@ -147,7 +156,10 @@ impl CloudInitTab {
             });
             ui.end_row();
             ui.label("SSH public keys");
-            ui.add(egui::TextEdit::multiline(&mut self.sshkeys).desired_rows(3).desired_width(560.0).font(egui::TextStyle::Monospace));
+            ui.vertical(|ui| {
+                ui.add(egui::TextEdit::multiline(&mut self.sshkeys).desired_rows(3).desired_width(560.0).font(egui::TextStyle::Monospace));
+                self.pubkeys.button(ui);
+            });
             ui.end_row();
             ui.label("DNS servers");
             ui.add(egui::TextEdit::singleline(&mut self.nameserver).hint_text("use host settings"));
