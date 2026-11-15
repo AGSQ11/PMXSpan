@@ -106,8 +106,10 @@ pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     if bracketed {
         out.extend_from_slice(b"\x1b[200~");
     }
-    // A pasted ESC[201~ must not end the bracket early.
-    out.extend_from_slice(if bracketed { normalized.replace("\x1b[201~", "") } else { normalized }.as_bytes());
+    // No ESC may survive inside the bracket: removing only "ESC[201~" can join
+    // the fragments around it into a new end marker (ESC[2ESC[201~01~), so the
+    // marker goes first (keeping the text around it) and any other ESC after it.
+    out.extend_from_slice(if bracketed { normalized.replace("\x1b[201~", "").replace('\x1b', "") } else { normalized }.as_bytes());
     if bracketed {
         out.extend_from_slice(b"\x1b[201~");
     }
@@ -123,6 +125,18 @@ mod tests {
     }
     fn ctrl() -> Modifiers {
         Modifiers { ctrl: true, command: !cfg!(target_os = "macos"), ..Modifiers::NONE }
+    }
+
+    #[test]
+    fn pasted_end_marker_cannot_close_the_bracket() {
+        for evil in ["a\x1b[201~b", "\x1b[2\x1b[201~01~rm -rf /\r", "\x1b\x1b[201~[201~", "\x1b[\x1b[2\x1b[201~01~201~x"] {
+            let out = paste_bytes(evil, true);
+            let body = &out[6..out.len() - 6];
+            assert!(out.starts_with(b"\x1b[200~") && out.ends_with(b"\x1b[201~"));
+            assert!(!body.contains(&0x1b), "ESC left in the pasted body: {body:?}");
+        }
+        assert_eq!(paste_bytes("a\nb", true), b"\x1b[200~a\rb\x1b[201~");
+        assert_eq!(paste_bytes("a\nb", false), b"a\rb");
     }
 
     #[test]
