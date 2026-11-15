@@ -40,14 +40,25 @@ impl Source {
     }
 }
 
+/// Config keys that size a guest and are therefore covered by pool limits.
+const QUOTA_KEYS: &[&str] = &["memory", "cores", "sockets", "vcpus"];
+
 /// Applies a catalog entry's ostype and config overrides. Keys outside the
 /// catalog allowlist are skipped here too, so an entry stored before the
 /// allowlist existed (or edited on disk) cannot slip them through.
+///
+/// Sizing keys are never taken from a catalog: the wizard (or, on a rebuild, the
+/// guest's own config) decides them and tenant pool limits were checked
+/// against exactly those values.
 pub fn apply_catalog_overrides(p: &mut Params, ctx: &JobCtx, entry: &CatalogEntry) {
     if !entry.ostype.is_empty() {
         p.push("ostype", catalog::normalize_ostype(&entry.virt, &entry.ostype));
     }
     for (k, v) in &entry.config {
+        if QUOTA_KEYS.contains(&k.as_str()) {
+            ctx.warn(format!("catalog entry `{}`: ignored `{k}` (sized in the wizard and checked against pool limits)", entry.id));
+            continue;
+        }
         match catalog::check_config_key(&entry.virt, k, v) {
             Ok(()) => p.push(k, v),
             Err(e) => ctx.warn(format!("catalog entry `{}`: skipped {e:#}", entry.id)),
@@ -974,6 +985,24 @@ impl AnyBool for serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn catalog_cannot_override_sizing_after_the_limit_check() {
+        let entry = CatalogEntry {
+            id: "big".into(),
+            virt: "qemu".into(),
+            config: [("memory", "1048576"), ("cores", "128"), ("sockets", "8"), ("vcpus", "999"), ("bios", "ovmf")]
+                .into_iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            ..Default::default()
+        };
+        let mut p = Params::new().set("memory", 2048).set("cores", 2);
+        apply_catalog_overrides(&mut p, &JobCtx::standalone("t"), &entry);
+        assert_eq!((p.get("memory"), p.get("cores")), (Some("2048"), Some("2")));
+        assert!(p.get("sockets").is_none() && p.get("vcpus").is_none());
+        assert_eq!(p.get("bios"), Some("ovmf"), "harmless keys still apply");
+    }
 
     #[test]
     fn net_lines() {
