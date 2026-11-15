@@ -296,22 +296,33 @@ const SECRET_KEYS: [&str; 8] =
 /// Redacts credentials from free text before it reaches logs. Catches
 /// `key=value` (forms, headers), `key: value` and JSON `"key": "value"`.
 pub fn redact(s: &str) -> String {
-    let mut out = s.to_string();
+    let mut cur = s.to_string();
     for key in SECRET_KEYS {
-        let mut from = 0;
-        while let Some(pos) = out[from..].find(key) {
+        // One linear pass per key, building the result in a fresh string: no
+        // in-place splices (each would shift the tail) and no value scan for a
+        // match that is not a whole name.
+        let mut res = String::with_capacity(cur.len());
+        let (mut copied, mut from) = (0, 0);
+        while let Some(pos) = cur[from..].find(key) {
             let start = from + pos;
             from = start + key.len();
             // Whole names only: `password` must not fire inside `cipassword`,
             // nor `ticket` in the API path `/access/ticket: …`.
-            let whole = out[..start].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/')));
-            if let Some((a, b)) = secret_value(&out, from).filter(|_| whole) {
-                out.replace_range(a..b, "[redacted]");
-                from = a + "[redacted]".len();
+            let whole = cur[..start].chars().next_back().is_none_or(|c| !(c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '/')));
+            if !whole {
+                continue;
+            }
+            if let Some((a, b)) = secret_value(&cur, from) {
+                res.push_str(&cur[copied..a]);
+                res.push_str("[redacted]");
+                copied = b;
+                from = b;
             }
         }
+        res.push_str(&cur[copied..]);
+        cur = res;
     }
-    out
+    cur
 }
 
 /// The byte range of the value following a secret's name at `i`, if the name
@@ -391,6 +402,18 @@ mod tests {
         assert!(parsed.is_encrypted());
         assert!(parsed.decrypt("wrong").is_err());
         assert_eq!(parsed.decrypt("s3cret pass").unwrap().public_key().to_openssh().unwrap(), public);
+    }
+
+    #[test]
+    fn redaction_is_linear_on_hostile_input() {
+        let started = std::time::Instant::now();
+        // Every "ticket" is glued to a letter (not a whole name) and nothing ends a value.
+        let r = redact(&"xticket=".repeat(1 << 16));
+        assert_eq!(r.len(), 8 << 16);
+        // Many accepted secrets: each replaced in place used to shift the whole tail.
+        let r = redact(&"ticket=a&".repeat(1 << 16));
+        assert_eq!(r, "ticket=[redacted]&".repeat(1 << 16));
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "took {:?}", started.elapsed());
     }
 
     #[test]
