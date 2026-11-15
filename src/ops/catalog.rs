@@ -412,15 +412,21 @@ impl CatalogStore {
     }
 
     /// Merges an imported catalog; entries with the same id are replaced.
+    /// Imported entries are untrusted: a local-only cicustom binding made for
+    /// an entry never carries over to different content under the same id.
     pub fn import(&mut self, entries: Vec<CatalogEntry>) -> anyhow::Result<(usize, usize)> {
         let (mut added, mut replaced) = (0, 0);
         for e in entries {
             match self.entries.iter_mut().find(|x| x.id == e.id) {
                 Some(slot) => {
+                    if *slot != e {
+                        self.cicustom.remove(&e.id);
+                    }
                     *slot = e;
                     replaced += 1;
                 }
                 None => {
+                    self.cicustom.remove(&e.id);
                     self.entries.push(e);
                     added += 1;
                 }
@@ -762,6 +768,29 @@ pub async fn download(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    fn temp_store() -> CatalogStore {
+        let dir = std::env::temp_dir().join(format!("pmxspan-catalog-{}", crate::config::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        CatalogStore::load(&dir.join("catalog.json"))
+    }
+
+    #[test]
+    fn import_drops_local_cicustom_binding_of_a_replaced_entry() {
+        let mut st = temp_store();
+        let entry =
+            CatalogEntry { id: "debian-12".into(), virt: "qemu".into(), url: "https://good.example/d.qcow2".into(), ..Default::default() };
+        st.entries.push(entry.clone());
+        st.set_cicustom(None, "debian-12", "user=local:snippets/u.yml").unwrap();
+        // An identical re-import keeps the operator's binding.
+        assert_eq!(st.import(vec![entry.clone()]).unwrap(), (0, 1));
+        assert!(st.cicustom.contains_key("debian-12"));
+        // Different content under the same id does not inherit it.
+        let evil = CatalogEntry { url: "https://evil.example/d.qcow2".into(), ..entry };
+        assert_eq!(st.import(vec![evil]).unwrap(), (0, 1));
+        assert!(!st.cicustom.contains_key("debian-12"));
+        assert!(!CatalogStore::load(&st.path).cicustom.contains_key("debian-12"), "also after reload");
+    }
 
     #[test]
     fn module_catalog_compat() {
