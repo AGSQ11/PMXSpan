@@ -93,6 +93,10 @@ impl Vault {
     }
 
     pub fn create(path: &Path, master: &str) -> anyhow::Result<Self> {
+        // Whatever is there (even a vault this build cannot open) is not ours to overwrite.
+        if path.exists() {
+            bail!("{} already exists; move it aside before creating a new vault", path.display());
+        }
         let mut v = Self { path: path.to_path_buf(), file: VaultFile::default(), key: None };
         v.rekey(master, BTreeMap::new())?;
         Ok(v)
@@ -239,6 +243,18 @@ mod tests {
     fn temp_path() -> (PathBuf, PathBuf) {
         let dir = std::env::temp_dir().join(format!("pxp-vault-{}", crate::config::new_id()));
         (dir.join("vault.json"), dir)
+    }
+
+    #[test]
+    fn create_never_overwrites_an_existing_file() {
+        let dir = std::env::temp_dir().join(format!("pxp-vault-keep-{}", crate::config::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("vault.json");
+        std::fs::write(&path, r#"{"version": 99, "entries": {}}"#).unwrap();
+        assert!(Vault::open(&path).is_err(), "newer format is refused");
+        assert!(Vault::create(&path, "hunter22").is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), r#"{"version": 99, "entries": {}}"#);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -330,9 +330,20 @@ impl App {
         let config = AppConfig::load(&paths.config_file());
         let ipam = Arc::new(Mutex::new(IpamDb::load(&paths.ipam_file())));
         let catalog = Arc::new(Mutex::new(CatalogStore::load(&paths.catalog_file())));
-        let vault = if Vault::exists(&paths.vault_file()) { Vault::open(&paths.vault_file()).ok() } else { None };
+        let vault_exists = Vault::exists(&paths.vault_file());
+        let (vault, vault_error) = if vault_exists {
+            match Vault::open(&paths.vault_file()) {
+                Ok(v) => (Some(v), None),
+                Err(e) => {
+                    tracing::error!("vault {} cannot be opened: {e:#}", paths.vault_file().display());
+                    (None, Some(format!("{e:#}")))
+                }
+            }
+        } else {
+            (None, None)
+        };
         let mut app = Self {
-            unlock: unlock::UnlockView::new(vault.as_ref()),
+            unlock: unlock::UnlockView::new(vault_exists, vault_error),
             paths,
             config,
             vault,
@@ -511,7 +522,7 @@ impl App {
         self.connecting = None;
         self.totp = None;
         self.servers = Default::default();
-        self.unlock = unlock::UnlockView::new(self.vault.as_ref());
+        self.unlock = unlock::UnlockView::new(self.vault.is_some(), None);
         self.last_activity = Instant::now();
         tracing::info!("vault locked");
     }
