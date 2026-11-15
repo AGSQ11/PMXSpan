@@ -216,6 +216,18 @@ async fn generic_client_against_mock_cluster() {
     let guests = c.ok("list_guests", json!({"name": "web"})).await;
     assert!(guests.contains("10.0.0.100"), "{guests}");
 
+    // web01's agent claims dns01's static address. Once that claim is cached it must not
+    // outrank the configured owner, in this or in another MCP session.
+    let _ = c.ok("get_guest", json!({"vmid": 100})).await;
+    let mut other = Client::new(server.port());
+    let resp = other
+        .post(&json!({"jsonrpc":"2.0","id":1,"method":"initialize","params":{
+            "protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"second","version":"0"}}}))
+        .await;
+    other.session = Some(resp.headers()["mcp-session-id"].to_str().unwrap().to_string());
+    let hit = other.ok("find_by_ip", json!({"ip": "10.20.0.53"})).await;
+    assert!(hit.contains("CT 102 'dns01'") && hit.contains("static network config") && !hit.contains("VM 100"), "{hit}");
+
     let g = c.ok("get_guest", json!({"vmid": 100})).await;
     assert!(g.contains("before_upgrade") && g.contains("web01") && g.contains("customer-acme") && g.contains("scsi0="), "{g}");
     let (e, err) = c.tool("get_guest", json!({"vmid": 4242})).await;

@@ -975,9 +975,12 @@ class Handler(BaseHTTPRequestHandler):
             if cmd == "get-fsinfo":
                 return {"result": [{"mountpoint": "/", "type": "ext4", "total-bytes": 20 * 2**30, "used-bytes": 6 * 2**30}]}
             if cmd == "network-get-interfaces":
+                addrs = [{"ip-address": f"10.0.0.{vmid % 200}", "prefix": 24}, {"ip-address": "fe80::1", "prefix": 64}]
+                if vmid == 100:
+                    # A guest claiming another guest's configured address (dns01's static one).
+                    addrs.append({"ip-address": "10.20.0.53", "prefix": 24})
                 return {"result": [{"name": "lo", "ip-addresses": [{"ip-address": "127.0.0.1", "prefix": 8}]},
-                                   {"name": "eth0", "ip-addresses": [{"ip-address": f"10.0.0.{vmid % 200}", "prefix": 24},
-                                                                     {"ip-address": "fe80::1", "prefix": 64}]}]}
+                                   {"name": "eth0", "ip-addresses": addrs}]}
             if cmd == "exec":
                 argv = a.get("command", "")
                 argv = " ".join(argv) if isinstance(argv, list) else argv

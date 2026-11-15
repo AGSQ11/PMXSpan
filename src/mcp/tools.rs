@@ -868,16 +868,8 @@ async fn find_by_ip(view: &AppView, ctx: &Ctx, args: &Value) -> R {
     {
         node_hit = status.iter().find(|n| n.s("type") == "node" && same_ip(&n.s("ip"), &ip)).map(|n| n.s("name"));
     }
-    // 3. Agent addresses seen recently.
-    if hits.is_empty() && node_hit.is_none() {
-        for (vmid, a) in view.cached_agent_all(&ctx.server_id) {
-            if same_ip(&a, &ip) {
-                hits.push((vmid, "guest agent / container interface (recently seen)".into()));
-            }
-        }
-    }
     let guests: Vec<Resource> = res.iter().filter(|r| r.kind().is_some() && !r.template).take(500).cloned().collect();
-    // 4. Static network config.
+    // 3. Static network config: written through the PVE API, never by a guest.
     if hits.is_empty() && node_hit.is_none() {
         let futs: Vec<_> = guests
             .iter()
@@ -892,8 +884,16 @@ async fn find_by_ip(view: &AppView, ctx: &Ctx, args: &Value) -> R {
             .collect();
         hits.extend(run_bounded(futs).await.into_iter().map(|(v, n)| (v, format!("static network config (net{n})"))));
     }
-    // 5. Live guest agents / container interfaces.
+    // 4. Addresses guests report about themselves. A guest decides these, so they
+    //    only count when nothing configured owns the address; they are labelled as
+    //    unverified, and a cached claim never replaces the live look.
     if hits.is_empty() && node_hit.is_none() {
+        let mut claims: std::collections::HashMap<u64, String> = std::collections::HashMap::new();
+        for (vmid, a) in view.cached_agent_all(&ctx.server_id) {
+            if same_ip(&a, &ip) {
+                claims.insert(vmid, "guest agent / container interface (recently seen)".into());
+            }
+        }
         let futs: Vec<_> = guests
             .iter()
             .filter(|r| r.status == "running")
@@ -905,11 +905,19 @@ async fn find_by_ip(view: &AppView, ctx: &Ctx, args: &Value) -> R {
             })
             .collect();
         for (vmid, kind, ips) in run_bounded(futs).await {
+            claims.remove(&vmid); // the live answer replaces what was cached
             if ips.iter().any(|a| same_ip(a, &ip)) {
-                hits.push((vmid, if kind == GuestKind::Qemu { "guest agent".into() } else { "container interface".into() }));
+                claims.insert(vmid, if kind == GuestKind::Qemu { "guest agent".into() } else { "container interface".into() });
             }
             view.cache_agent_ips(&ctx.server_id, vmid, ips);
         }
+        if claims.len() > 1 {
+            notes.push(format!(
+                "{} guests report this address themselves; none is configured with it, so none can be trusted as its owner.",
+                claims.len()
+            ));
+        }
+        hits.extend(claims.into_iter().map(|(v, src)| (v, format!("{src}, unverified: reported by the guest itself"))));
     }
 
     let mut out = String::new();
