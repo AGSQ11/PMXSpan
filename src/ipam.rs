@@ -171,6 +171,9 @@ pub struct IpamDb {
     pub history: Vec<IpEvent>,
     #[serde(skip)]
     path: PathBuf,
+    /// The file existed but was unreadable and could not be set aside: never save over it.
+    #[serde(skip)]
+    locked: bool,
 }
 
 /// What a guest needs to get an address.
@@ -202,8 +205,9 @@ pub struct Allocation {
 
 impl IpamDb {
     pub fn load(path: &Path) -> Self {
-        let mut db: IpamDb = std::fs::read_to_string(path).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        let (mut db, preserved): (IpamDb, bool) = crate::config::load_state(path);
         db.path = path.to_path_buf();
+        db.locked = !preserved;
         db.normalize();
         db
     }
@@ -236,6 +240,9 @@ impl IpamDb {
     }
 
     pub fn save(&self) -> anyhow::Result<()> {
+        if self.locked {
+            anyhow::bail!("{} could not be read and could not be preserved; not overwriting it", self.path.display());
+        }
         write_atomic(&self.path, serde_json::to_string_pretty(self)?.as_bytes())
     }
 
@@ -566,6 +573,28 @@ mod tests {
         let again = IpamDb::load(&db.path);
         assert_eq!(again.history.len(), 7);
         let _ = std::fs::remove_file(&db.path);
+    }
+
+    #[test]
+    fn unreadable_state_is_kept_not_overwritten() {
+        let dir = std::env::temp_dir().join(format!("pmxspan-ipam-bad-{}", crate::config::new_id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ipam.json");
+        std::fs::write(&path, r#"{"pools": [ truncated"#).unwrap();
+        let mut db = IpamDb::load(&path);
+        assert!(db.pools.is_empty());
+        let kept: Vec<_> =
+            std::fs::read_dir(&dir).unwrap().flatten().filter(|e| e.file_name().to_string_lossy().contains("unreadable")).collect();
+        assert_eq!(kept.len(), 1, "the bad file is kept beside the original");
+        assert_eq!(std::fs::read_to_string(kept[0].path()).unwrap(), r#"{"pools": [ truncated"#);
+        // A missing file is simply a fresh store and nothing is set aside.
+        let fresh = dir.join("none").join("ipam.json");
+        let _ = IpamDb::load(&fresh);
+        assert!(!dir.join("none").exists());
+        // A store whose file could not be preserved refuses to save.
+        db.locked = true;
+        assert!(db.save().is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

@@ -442,6 +442,30 @@ pub fn create_private(path: &Path) -> std::io::Result<std::fs::File> {
 
 /// Write to a temp file then rename, so a crash never leaves half a config.
 /// The temp file is private from the moment it exists and has a random name.
+/// Loads a JSON state file. Only a missing file means an empty store. A file that
+/// cannot be read or parsed is renamed beside the original (`.unreadable-<time>`)
+/// and logged, so the next save cannot destroy the only copy. The flag is false
+/// when it could not be preserved: the caller must then refuse to save.
+pub fn load_state<T: serde::de::DeserializeOwned + Default>(path: &Path) -> (T, bool) {
+    let why = match std::fs::read_to_string(path) {
+        Ok(text) => match serde_json::from_str(&text) {
+            Ok(v) => return (v, true),
+            Err(e) => e.to_string(),
+        },
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return (T::default(), true),
+        Err(e) => e.to_string(),
+    };
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+    let keep = path.with_extension(format!("{ext}.unreadable-{}", chrono::Local::now().format("%Y%m%d-%H%M%S")));
+    let kept = std::fs::rename(path, &keep).is_ok() || std::fs::copy(path, &keep).is_ok();
+    if kept {
+        tracing::error!("{} could not be loaded ({why}); kept as {}, starting empty", path.display(), keep.display());
+    } else {
+        tracing::error!("{} could not be loaded ({why}) and could not be preserved; it will not be overwritten", path.display());
+    }
+    (T::default(), kept)
+}
+
 pub fn write_atomic(path: &Path, data: &[u8]) -> anyhow::Result<()> {
     use std::io::Write;
     if let Some(dir) = path.parent() {
