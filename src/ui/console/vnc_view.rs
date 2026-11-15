@@ -149,7 +149,7 @@ impl VncView {
                     for row in 0..h {
                         let src = &bgra[row * w * 4..(row + 1) * w * 4];
                         let dst = &mut self.fb[(y + row) * self.width + x..(y + row) * self.width + x + w];
-                        for (d, s) in dst.iter_mut().zip(src.chunks_exact(4)) {
+                        for (d, s) in dst.iter_mut().zip(src.as_chunks::<4>().0) {
                             *d = Color32::from_rgb(s[2], s[1], s[0]);
                         }
                     }
@@ -179,8 +179,13 @@ impl VncView {
                         self.cursor_hidden = true;
                         continue;
                     }
-                    let pixels: Vec<Color32> =
-                        bgra.chunks_exact(4).take(w * h).map(|s| Color32::from_rgba_unmultiplied(s[2], s[1], s[0], s[3])).collect();
+                    let pixels: Vec<Color32> = bgra
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .take(w * h)
+                        .map(|s| Color32::from_rgba_unmultiplied(s[2], s[1], s[0], s[3]))
+                        .collect();
                     let img = ColorImage::new([w, h], pixels);
                     let tex = ctx.load_texture("vnc-cursor", img, TextureOptions::NEAREST);
                     self.cursor =
