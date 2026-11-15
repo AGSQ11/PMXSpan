@@ -31,6 +31,8 @@ pub const MAX_CONNECTIONS: usize = 32;
 pub const SESSION_IDLE: Duration = Duration::from_secs(30 * 60);
 const MAX_SESSIONS: usize = 128;
 const DRAIN: Duration = Duration::from_secs(2);
+/// How long a response write may stay blocked before the connection is dropped.
+const WRITE_STALL: Duration = Duration::from_secs(15);
 
 struct Session {
     last_seen: Instant,
@@ -544,6 +546,72 @@ impl RunningServer {
     }
 }
 
+/// A connection's socket that gives up when a write stays blocked for `limit`.
+/// hyper's header timeout only runs while a request head is being read, so a
+/// peer that sends requests and never reads the answers would otherwise hold
+/// its connection slot (and its task) for ever.
+struct WriteDeadline<S> {
+    inner: S,
+    limit: Duration,
+    stalled: Option<std::pin::Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<S> WriteDeadline<S> {
+    fn new(inner: S, limit: Duration) -> Self {
+        Self { inner, limit, stalled: None }
+    }
+
+    /// Applies the deadline to a write-side result.
+    fn guard<T>(&mut self, cx: &mut std::task::Context<'_>, r: std::task::Poll<std::io::Result<T>>) -> std::task::Poll<std::io::Result<T>> {
+        use std::task::Poll;
+        match r {
+            Poll::Ready(v) => {
+                self.stalled = None;
+                Poll::Ready(v)
+            }
+            Poll::Pending => {
+                let limit = self.limit;
+                let timer = self.stalled.get_or_insert_with(|| Box::pin(tokio::time::sleep(limit)));
+                match timer.as_mut().poll(cx) {
+                    Poll::Ready(()) => {
+                        Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "peer is not reading the response")))
+                    }
+                    Poll::Pending => Poll::Pending,
+                }
+            }
+        }
+    }
+}
+
+impl<S: tokio::io::AsyncRead + Unpin> tokio::io::AsyncRead for WriteDeadline<S> {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.inner).poll_read(cx, buf)
+    }
+}
+
+impl<S: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for WriteDeadline<S> {
+    fn poll_write(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        let r = std::pin::Pin::new(&mut self.inner).poll_write(cx, buf);
+        self.guard(cx, r)
+    }
+    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        let r = std::pin::Pin::new(&mut self.inner).poll_flush(cx);
+        self.guard(cx, r)
+    }
+    fn poll_shutdown(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<std::io::Result<()>> {
+        let r = std::pin::Pin::new(&mut self.inner).poll_shutdown(cx);
+        self.guard(cx, r)
+    }
+}
+
 async fn serve(
     listeners: Vec<TcpListener>,
     state: Arc<ServerState>,
@@ -600,7 +668,7 @@ async fn serve(
                 let conn = http1::Builder::new()
                     .timer(TokioTimer::new())
                     .header_read_timeout(Duration::from_secs(15))
-                    .serve_connection(TokioIo::new(stream), svc);
+                    .serve_connection(TokioIo::new(WriteDeadline::new(stream, WRITE_STALL)), svc);
                 let fut = graceful.watch(conn);
                 tokio::spawn(async move {
                     let _ = fut.await;
@@ -625,6 +693,30 @@ async fn serve(
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn blocked_response_write_times_out() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        // A peer that never reads: the 16-byte pipe fills up and the write blocks.
+        let (server_side, mut peer) = tokio::io::duplex(16);
+        let mut io = WriteDeadline::new(server_side, Duration::from_millis(150));
+        let started = Instant::now();
+        let err = io.write_all(&[0u8; 4096]).await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_secs(5));
+        // A reader that keeps up is not cut off.
+        let (server_side, mut peer2) = tokio::io::duplex(16);
+        let mut io = WriteDeadline::new(server_side, Duration::from_millis(150));
+        let reader = tokio::spawn(async move {
+            let mut got = Vec::new();
+            peer2.read_to_end(&mut got).await.unwrap();
+            got.len()
+        });
+        io.write_all(&[1u8; 4096]).await.unwrap();
+        io.shutdown().await.unwrap();
+        assert_eq!(reader.await.unwrap(), 4096);
+        let _ = peer.shutdown().await;
+    }
 
     pub const TOKEN: &str = "test-token-0123456789abcdefghijklmnopqrstu";
 
