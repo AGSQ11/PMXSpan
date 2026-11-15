@@ -463,3 +463,37 @@ async fn sshspan_client_sequence() {
     };
     assert!(std::net::TcpStream::connect(("127.0.0.1", port)).is_err(), "port {port} still accepts after stop");
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn drift_release_needs_the_cluster_to_confirm() {
+    let Some(mock) = start_mock() else { return };
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let client = match PveClient::login(&profile(mock.port), "mocktoken", None).await.expect("login to the mock") {
+        LoginOutcome::Ok(c) => c,
+        LoginOutcome::NeedTotp => panic!("unexpected TOTP"),
+    };
+    let mut db = IpamDb::load(&mock.dir.join("drift-ipam.json"));
+    let pool = Pool { name: "lan".into(), cidr: "10.20.0.0/24".into(), gateway: "10.20.0.1".into(), ..Default::default() };
+    for (ip, vmid) in [("10.20.0.21", 101), ("10.20.0.99", 4242)] {
+        db.assignments.push(Assignment {
+            ip: ip.into(),
+            pool_id: pool.id.clone(),
+            server_id: "lab-id".into(),
+            vmid: Some(vmid),
+            hostname: "x".into(),
+            iface: Some(0),
+            main: true,
+            ..Default::default()
+        });
+    }
+    db.pools.push(pool);
+    let ipam = Mutex::new(db);
+    // VMID 101 (db01) exists on the cluster: nothing may be released, whatever a stale list said.
+    let err = crate::ops::drift::release_orphan(&client, &ipam, "lab-id", 101).await.unwrap_err();
+    assert!(format!("{err:#}").contains("still exists"), "{err:#}");
+    assert!(ipam.lock().assignments.iter().any(|a| a.vmid == Some(101)));
+    // A VMID the cluster reports free is released.
+    let ok = crate::ops::drift::release_orphan(&client, &ipam, "lab-id", 4242).await.unwrap();
+    assert!(ok.contains("10.20.0.99"), "{ok}");
+    assert!(!ipam.lock().assignments.iter().any(|a| a.vmid == Some(4242)));
+}
