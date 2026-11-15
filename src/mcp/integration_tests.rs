@@ -228,6 +228,14 @@ async fn generic_client_against_mock_cluster() {
     assert!(c.ok("list_snapshots", json!({"vmid": 100})).await.contains("before_upgrade"));
     let backups = c.ok("list_backups", json!({})).await;
     assert!(backups.contains("pbs:backup/vm/100") && backups.contains("vzdump-qemu-100"), "{backups}");
+    // A node is one path segment of a real node: no traversal, query or fragment.
+    for bad in ["../access/users?", "pve1/../../access", "..", "pve1#", "nope"] {
+        let (e, err) = c.tool("list_backups", json!({"node": bad})).await;
+        assert!(err && e.starts_with("Invalid arguments"), "list_backups node {bad:?}: {e}");
+    }
+    assert!(c.ok("list_backups", json!({"node": "pve1"})).await.contains("backup(s)"));
+    let (e, err) = c.tool("get_task_log", json!({"upid": "UPID:pve1/../../access#:0000:0000:00000000:qmstart:100:root@pam:"})).await;
+    assert!(err && e.starts_with("Invalid arguments"), "{e}");
     let pools = c.ok("ipam_lookup", json!({})).await;
     assert!(pools.contains("lan | 10.20.0.0/24"), "{pools}");
     assert!(c.ok("ipam_lookup", json!({"address": "10.20.0.21"})).await.contains("VMID 101"));

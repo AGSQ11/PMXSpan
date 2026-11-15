@@ -1066,10 +1066,21 @@ async fn list_tasks(ctx: &Ctx, args: &Value) -> R {
     Ok(out)
 }
 
+/// A PVE node name as one safe path segment: the charset of real node names
+/// (hostnames), never empty and never a dot segment.
+fn valid_node_name(n: &str) -> bool {
+    !n.is_empty()
+        && n.len() <= 64
+        && !n.chars().all(|c| c == '.')
+        && n.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+}
+
 async fn get_task_log(ctx: &Ctx, args: &Value) -> R {
     let upid = arg_str(args, "upid").ok_or("Invalid arguments: 'upid' is required (UPID:node:...), from list_tasks.")?;
     let lines = arg_limit(args, "lines", 50, 500)? as u64;
-    let parsed = Upid::parse(&upid).ok_or_else(|| format!("Invalid arguments: '{upid}' is not a Proxmox task id (UPID:node:...)."))?;
+    let parsed = Upid::parse(&upid)
+        .filter(|p| valid_node_name(&p.node))
+        .ok_or_else(|| format!("Invalid arguments: '{upid}' is not a Proxmox task id (UPID:node:...)."))?;
     let path = format!("/nodes/{}/tasks/{}/status", parsed.node, urlencoding::encode(&upid));
     let st = ctx.client.get(&path).await.map_err(|e| api_err("Reading the task status", e))?;
     let log = ctx.client.task_log_tail(&parsed.node, &upid, lines).await.map_err(|e| api_err("Reading the task log", e))?;
@@ -1090,7 +1101,7 @@ async fn get_task_log(ctx: &Ctx, args: &Value) -> R {
 
 async fn get_node_status(ctx: &Ctx, args: &Value) -> R {
     let node = arg_str(args, "node").ok_or("Invalid arguments: 'node' is required; list_nodes shows the names.")?;
-    if !node.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_') {
+    if !valid_node_name(&node) {
         return Err(format!("Invalid arguments: '{node}' is not a node name."));
     }
     let s =
@@ -1134,6 +1145,10 @@ async fn list_backups(ctx: &Ctx, args: &Value) -> R {
     let nodes: Vec<String> = if let Some(v) = vmid {
         vec![find_guest(ctx, &res, v)?.node]
     } else if let Some(n) = node {
+        // The node becomes a path segment: it must be a real node of this cluster.
+        if !valid_node_name(&n) || !res.iter().any(|r| r.rtype == "node" && r.node == n) {
+            return Err(format!("Invalid arguments: '{n}' is not a node of {}; list_nodes shows the names.", ctx.label));
+        }
         vec![n]
     } else {
         let mut v: Vec<String> = res.iter().filter(|r| r.rtype == "node" && r.status == "online").map(|r| r.node.clone()).collect();
@@ -1445,6 +1460,16 @@ mod tests {
     use super::*;
 
     const GOLDEN: &str = include_str!("../../tests/mcp_tools.golden.json");
+
+    #[test]
+    fn node_names_are_single_safe_segments() {
+        for ok in ["pve1", "node-2", "pve.lab_3"] {
+            assert!(valid_node_name(ok), "{ok}");
+        }
+        for bad in ["", ".", "..", "../access/users?", "pve1/x", "pve1#", "pve1?x=1", "a b", "pve1\\x", "%2e%2e", &"a".repeat(65)] {
+            assert!(!valid_node_name(bad), "{bad:?}");
+        }
+    }
 
     fn view() -> AppView {
         let dir = std::env::temp_dir().join(format!("pmxspan-mcp-tools-{}", crate::config::new_id()));
