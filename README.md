@@ -12,6 +12,15 @@ PMXSpan is a standalone desktop app for managing Proxmox VE clusters, written in
 </p>
 <p align="center"><sub>Graphite (dark) and Daylight (light). Every screenshot in this README was taken against the bundled mock cluster. More in <a href="#screenshots">Screenshots</a>.</sub></p>
 
+## What's new in 0.7.0
+
+- **In-app consoles**: a VNC viewer for VM displays and a terminal for containers, VM serial ports and node shells, each in its own window, over PMXSpan's own authenticated connection (no browser login; VNC works with API tokens). See [Consoles](#consoles).
+- **SSHSpan integration**: *Connect with SSHSpan* and *Send to SSHSpan…* for guests and nodes, `pmxspan://` links back from SSHSpan, SSH host-key fingerprints from the guest agent, and a picker for the public keys on this computer. See [Working with SSHSpan](#working-with-sshspan).
+- **MCP server** (off by default) so AI assistants on this computer, such as SSHSpan's, can read the connected cluster and, if you allow it, run a few non-destructive actions. See [MCP server](#mcp-server-for-ai-assistants-such-as-sshspans).
+- **Security fixes** from a full security audit. A few behaviours changed: catalog entries no longer set a guest's CPU and memory, schedules are removed with their guest and switched off when the VMID now belongs to another guest, and releasing a drift orphan asks first.
+
+Every change is listed in [CHANGELOG.md](CHANGELOG.md).
+
 ## Why PMXSpan
 
 I built PMXSpan to automate three jobs I did by hand on Proxmox VE:
@@ -38,7 +47,7 @@ no agents on the nodes.
 | **Guest detail** | Summary (live status, agent/LXC IP addresses, traffic for the billing period, RRD graphs). Hardware (CPU/memory/options/tags/notes, disk resize/move/add/detach, ISO insert/eject, boot order, raw config). Network (bridge/VLAN/rate/firewall/MAC, LXC addressing). **IP addresses** (see below). Cloud-Init. Snapshots. Backups (back up/restore/protect/delete). Firewall (options, rules, reorder, log). Guest agent (OS/filesystems, set password, run commands). Task history. Manage (password reset, migrate, clone, **rebuild**, HA, pool, template, clear lock, destroy). |
 | **Create wizard** | Builds VMs from a cloud-init template (full clone, then migrated if the template's disks are node-local), from an **OS catalog image**, or from an ISO, and containers from a `vztmpl` on storage or from the catalog. Auto-placement, IPAM, cloud-init user/password/SSH keys, tags and pools are all set from the wizard. New guests get the `PMXSpan` tag (configurable in Settings) so you can find them in Proxmox. |
 | **Auto-placement** | Nodes without enough free RAM are skipped. Each remaining node's storage is filtered by content type and free space. The survivors are ordered by your RAM/CPU/Disk priority and picked *dense*, *sparse* or *random*. |
-| **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. Every change is kept in a **history** (assigned, adopted, released, made main, reserved), and a **drift** view compares IPAM with the cluster: addresses kept for guests that are gone, static addresses IPAM does not know, main addresses that differ, and app-created guests without a record, each with a one-click fix. |
+| **IPAM** | A local IPv4/IPv6 pool database with ranges, gateways, DNS, VLAN, bridge/server scoping and reservations. A *preferred* IP is assigned exactly or the operation fails; it's never silently replaced. Addresses are released when a guest is destroyed or provisioning fails. Every change is kept in a **history** (assigned, adopted, released, made main, reserved), and a **drift** view compares IPAM with the cluster: addresses kept for guests that are gone, static addresses IPAM does not know, main addresses that differ, and app-created guests without a record, each with a fix. Releasing an address kept for a guest that is gone asks first and checks with the cluster that the VMID is really free. |
 | **IP assignment** | Per guest, per interface: assign one or more IPv4/IPv6 addresses from a pool (or an exact one), release them, pick the **main** address of each family, add an interface together with its addresses, remove one (its addresses are released), and adopt addresses already in a guest's config. The main addresses go into the guest config (LXC `netN`, VM cloud-init `ipconfigN`, the pool's VLAN on the NIC); additional ones are configured inside the guest. The **anti-spoofing IP filter** keeps an `ipfilter-netN` ipset per interface in sync with the assigned addresses. |
 | **OS image catalog** | Images for creating and reinstalling guests from a URL instead of a template: VM disk images (qcow2/raw/vmdk/ova, imported with `import-from`) and container templates. Catalogs import and export as JSON (`{"entries": [...]}` or an array with `id`, `label`, `virt`, `url`, `checksum`, `checksum_algorithm`, `cloud_user`, `ostype`, `nodes`, `config`/`tpl_data`, `image_format`). Images are downloaded to the per-server main or fallback storage with stall detection; permanent errors (404/403) fail at once, transient ones are retried, and a full or broken storage moves on to the next one. The downloaded file is always removed afterwards. |
 | **Rebuild / reinstall** | Replaces a guest's disks with a fresh template **or catalog image** while keeping its VMID, name, resources, NICs (**MAC addresses**), IP addresses, firewall rules/ipsets and pool. A catalog image is downloaded and the firewall config read *before* anything is deleted, so a failed download leaves the guest untouched. If the firewall can't be fully restored, the guest is left stopped instead of starting unprotected. You confirm by typing the VMID. Optionally (and by default) the guest is **backed up first**. |
@@ -47,7 +56,7 @@ no agents on the nodes.
 | **Access** | Users, API tokens (the secret is shown once), pools, ACLs, and a **tenant wizard** that creates a pool and a new `@pve` (or directory-realm) user with a role on `/pool/<pool>` only, so customers see nothing outside their pool. Existing accounts are never modified. |
 | **Jobs** | Every multi-step operation runs in the background and logs each step and the exact error it stopped on, including the tail of the Proxmox task log. No silent failures. |
 | **Backups** | Back up now, restore (also another guest's backup over this one), protect and delete. For **Proxmox Backup Server** snapshots, browse the files inside and download single files or whole folders (zip / tar.zst). |
-| **Automation** | Per-guest **snapshot schedules** with retention (every N hours, or daily / on chosen weekdays at a time) and **timed power actions** (start, shutdown, reboot, stop). Runs while PMXSpan is open, or unattended from `pmxspan --run-schedules` (see below). **Usage alerts** fire when CPU, memory, network or disk I/O of a guest stays above a threshold. |
+| **Automation** | Per-guest **snapshot schedules** with retention (every N hours, or daily / on chosen weekdays at a time) and **timed power actions** (start, shutdown, reboot, stop). Runs while PMXSpan is open, or unattended from `pmxspan --run-schedules` (see below). **Usage alerts** fire when CPU, memory, network or disk I/O of a guest stays above a threshold. Schedules belong to the guest they were made for: destroying it in PMXSpan removes them, and a schedule whose VMID now belongs to a guest with another name (a renamed guest, or a reused VMID) is switched off instead of run. |
 | **Tenant limits** | Per tenant pool: maximum guests, vCPUs, memory, disk and IP addresses, enforced when PMXSpan creates a guest in the pool, assigns addresses to one of its guests or moves a guest into it. Usage is shown next to each pool. |
 | **Placement controls** | A **VMID range** per server (new guests and clones get the lowest free ID in it) and **maintenance mode** for nodes, which auto-placement skips. |
 | **Create extras** | **Custom cloud-init** files (`cicustom` user/vendor/network snippets from the nodes, with a default per catalog image), **HA** on create (default per catalog image, optional group), and a generated **Ed25519 key pair** (private key saved locally, optionally passphrase-protected; the public key goes into the guest). |
@@ -184,7 +193,7 @@ Stale create locks are cleared with **Manage → Clear lock**. It uses the API's
 
 The Linux builds need glibc 2.31 or newer (Debian 11+, Ubuntu 20.04+, RHEL 9+, Fedora 32+). Uninstalling keeps your data (servers, encrypted vault, IPAM database). See *Data locations* below to remove it too.
 
-Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed, and attached to the GitHub release with a `SHA256SUMS.txt`. To build the Linux and Windows packages yourself: `packaging/build-installers.sh` (Linux host; the Windows setup is cross-compiled and needs `mingw-w64`, `nsis` and `rustup target add x86_64-pc-windows-gnu`; with `zig` and `cargo-zigbuild` installed the Linux builds target glibc 2.31). The macOS app is built on a Mac with `packaging/macos/build-app.sh`.
+Releases are built by `.github/workflows/release.yml` when a version tag is pushed (`0.7.0`; a `v` prefix also works), and attached to the GitHub release with a `SHA256SUMS.txt`. To build the Linux and Windows packages yourself: `packaging/build-installers.sh` (Linux host; the Windows setup is cross-compiled and needs `mingw-w64`, `nsis` and `rustup target add x86_64-pc-windows-gnu`; with `zig` and `cargo-zigbuild` installed the Linux builds target glibc 2.31). The macOS app is built on a Mac with `packaging/macos/build-app.sh`.
 
 ## Build from source
 
@@ -251,7 +260,7 @@ Limitations: SPICE is not shown in-app (the *SPICE* item still opens virt-viewer
 
 On macOS the handoff files go to `~/Library/Application Support/pmxspan/handoff/`.
 
-Logs rotate daily and are kept for 14 days. Set `PMXSPAN_LOG=debug` for verbose logs.
+Logs rotate daily and are kept for 14 days; a single log line is cut at 16 KiB and a day's file stops growing at 32 MiB. If the IPAM database or the OS catalog cannot be read, PMXSpan renames it to `<name>.json.unreadable-<date>-<time>` beside the original and logs an error rather than starting empty and overwriting it. Set `PMXSPAN_LOG=debug` for verbose logs.
 
 ## Setting up the OS image catalog
 
@@ -293,7 +302,7 @@ PMXSpan can act as a local **MCP (Model Context Protocol) server**, so an AI ass
 | `list_nodes` | Nodes with status, CPU, memory, uptime and maintenance mode. |
 | `list_guests` | VMs and containers (filter by name, tag, pool, status, node) with VMID, kind, node, status, pool, tags and main IPs from IPAM and recently seen guest-agent addresses. |
 | `get_guest` | One guest: status, resources, node, pool, tags, HA state, all known IPs (IPAM, static config, guest agent), snapshot names and a configuration summary without secrets. |
-| `find_by_ip` | Which guest (or node) owns an address: IPAM first, then the nodes, static guest network config, then the guest agents and container interfaces of running guests. SSHSpan uses it to map a terminal tab to a VM. |
+| `find_by_ip` | Which guest (or node) owns an address: IPAM first, then the nodes, static guest network config, then the guest agents and container interfaces of running guests; an address only a guest reports about itself is used when nothing configured owns it, and is marked unverified. SSHSpan uses it to map a terminal tab to a VM. |
 | `ipam_lookup` | Who holds an address, or whether it is free and in which pool; without an address, the pools with used and free counts. |
 | `list_tasks` | Recent tasks (optionally for one guest or node). |
 | `get_task_log` | A task's status and the tail of its log. |
@@ -302,7 +311,7 @@ PMXSpan can act as a local **MCP (Model Context Protocol) server**, so an AI ass
 | `list_snapshots` | A guest's snapshots. |
 | `list_ipam_drift` | Differences between IPAM and the guests' network configuration. |
 
-**Action tools** appear only when **Allow actions over MCP** is on (off by default): `power` (start, shutdown, reboot, stop, suspend, resume; waits up to 30 s and returns the UPID), `snapshot_create`, `agent_exec` (runs a program through the QEMU guest agent, output capped at 16 KiB, refused when the agent is not running) and `set_tags`.
+**Action tools** appear only when **Allow actions over MCP** is on (off by default): `power` (start, shutdown, reboot, stop, suspend, resume; waits up to 30 s and returns the UPID), `snapshot_create` (names starting with `auto-` are refused: they belong to snapshot schedules and their retention), `agent_exec` (runs a program through the QEMU guest agent, output capped at 16 KiB, refused when the agent is not running) and `set_tags`.
 
 **Always refused**, even with actions allowed: destroy, rebuild/reinstall, snapshot rollback, deleting snapshots or backups, restore, migrate, firewall and access changes (users, tokens, ACLs, passwords). A client that asks for one gets a message saying to do it in PMXSpan itself.
 
